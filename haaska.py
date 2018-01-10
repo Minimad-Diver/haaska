@@ -74,25 +74,25 @@ class HomeAssistant(object):
                          relurl)
         return r
 
-
-class ConnectedHomeCall(object):
-    def __init__(self, namespace, name, ha, payload):
+class Directive(object):
+    def __init__(self, namespace, name, ha, payload, endpoint):
         self.namespace = namespace
         self.name = name
         self.response_name = self.name + '.Response'
         self.ha = ha
         self.payload = payload
+        self.endpoint = endpoint
         self.entity = None
-        if 'appliance' in self.payload:
-            details = payload['appliance']['additionalApplianceDetails']
-            self.entity = mk_entity(ha, details['entity_id'])
+        self.context_properties = []
+        if self.endpoint and ('endpointId' in self.endpoint):
+            self.entity = mk_entity(ha, self.endpoint['endpointId'].replace(':', '.'))
 
-    class ConnectedHomeException(Exception):
+    class DirectiveException(Exception):
         def __init__(self, name="DriverInternalError", payload={}):
             self.error_name = name
             self.payload = payload
 
-    class ValueOutOfRangeError(ConnectedHomeException):
+    class ValueOutOfRangeError(DirectiveException):
         def __init__(self, minValue, maxValue):
             self.error_name = 'ValueOutOfRangeError'
             self.payload = {'minimumValue': minValue, 'maximumValue': maxValue}
@@ -105,9 +105,23 @@ class ConnectedHomeCall(object):
             if payload:
                 r['event']['payload'] = payload
             else:
-                r['event']['payload'] = {'success': True}
-            logger.debug('response payload: %s', str(r['event']))
-        except ConnectedHomeCall.ConnectedHomeException as e:
+                r['event']['payload'] = {}
+
+            if self.endpoint:
+                r['event']['endpoint'] = self.endpoint
+            # Setup context
+            self.context_properties.append({
+                    "namespace": "Alexa.EndpointHealth",
+                    "name": "connectivity",
+                    "value": {
+                        "value": "OK"
+                    },
+                    "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                    "uncertaintyInMilliseconds": 200
+                })
+            r['context'] = {'properties': self.context_properties}
+            logger.debug('response payload: %s', str(r['event']['payload']))
+        except Directive.DirectiveException as e:
             logger.exception('handler failed: %s, %s', e.error_name, e.payload)
             self.response_name = e.error_name
             r['event']['payload'] = e.payload
@@ -119,33 +133,16 @@ class ConnectedHomeCall(object):
         r['event']['header'] = {'namespace': self.namespace,
                        'messageId': str(uuid4()),
                        'name': self.response_name,
-                       'payloadVersion': '3'}
+                       'payloadVersion': '3',
+                       'correlationToken': '123'}
         return r
 
 
 class Alexa(object):
-    class Discovery(ConnectedHomeCall):
-        def Discover(self):
-            try:
-                return {'endpoints': discover_appliances(self.ha)}
-            except Exception:
-                logger.exception('v3 DiscoverAppliancesRequest failed')
-
-    class ConnectedHome(object):
-        class System(ConnectedHomeCall):
-            def HealthCheckRequest(self):
+        class Discovery(Directive):
+            def Discover(self):
                 try:
-                    self.ha.get('states')
-                    return {'isHealthy': True}
-                except Exception as e:
-                    logger.exception('HealthCheckRequest failed')
-                    return {'isHealthy': False, 'description': str(e)}
-
-        class Discovery(ConnectedHomeCall):
-            def DiscoverAppliancesRequest(self):
-                try:
-                    return {'discoveredAppliances':
-                            discover_appliances(self.ha)}
+                    return {'endpoints': discover_appliances(self.ha)}                            
                 except Exception:
                     logger.exception('DiscoverAppliancesRequest failed')
                     # v2 documentation is unclear as to what should be returned
@@ -153,152 +150,42 @@ class Alexa(object):
                     # 0 devices and log the error
                     return {'discoveredAppliances': {}}
 
-        class Control(ConnectedHomeCall):
-            def __init__(self, namespace, name, ha, payload):
-                super(Alexa.ConnectedHome.Control, self).__init__(
-                        namespace, name, ha, payload)
-                self.response_name = name.replace('Request', 'Confirmation')
-
-            def TurnOnRequest(self):
+        class PowerController(Directive):
+            def TurnOn(self):
+                print("Turning on")
                 self.entity.turn_on()
+                self.context_properties.append({
+                    "namespace": "Alexa.PowerController",
+                    "name": "powerState",
+                    "value": "ON",
+                    "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                    "uncertaintyInMilliseconds": 200
+                })
+                pass
 
-            def TurnOffRequest(self):
+            def TurnOff(self):
+                print("Turning off")
                 self.entity.turn_off()
+                self.context_properties.append({
+                    "namespace": "Alexa.PowerController",
+                    "name": "powerState",
+                    "value": "OFF",
+                    "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                    "uncertaintyInMilliseconds": 200
+                })
+                pass
 
-            def SetPercentageRequest(self):
-                percentage = self.payload['percentageState']['value']
-                self.entity.set_percentage(percentage)
+            
 
-            def handle_percentage_adj(self, deltaValue):
-                current = self.entity.get_percentage()
-                new = current + deltaValue
-
-                # So this looks weird, but the relative adjustments seem to
-                # always be +/- 25%, which means depending on the current
-                # brightness we could over-/undershoot the acceptable range.
-                # Instead, if we're not currently saturated, clamp the desired
-                # brightness to the allowed brightness.
-                if current != 100 and current != 0:
-                    if new < 0:
-                        new = 0
-                    elif new > 100:
-                        new = 100
-
-                if new > 100 or new < 0:
-                    raise ConnectedHomeCall.ValueOutOfRangeError(0, 100)
-
-                self.entity.set_percentage(new)
-
-            def IncrementPercentageRequest(self):
-                deltaValue = self.payload['deltaPercentage']['value']
-                return self.handle_percentage_adj(deltaValue)
-
-            def DecrementPercentageRequest(self):
-                deltaValue = -self.payload['deltaPercentage']['value']
-                return self.handle_percentage_adj(deltaValue)
-
-            def handle_color_temperature_adj(self, op):
-                current = self.entity.get_color_temperature()
-                new = op(current, 500)
-                self.entity.set_color_temperature(new)
-                return {'achievedState': {'colorTemperature': {'value': new}}}
-
-            def IncrementColorTemperatureRequest(self):
-                return self.handle_color_temperature_adj(operator.add)
-
-            def DecrementColorTemperatureRequest(self):
-                return self.handle_color_temperature_adj(operator.sub)
-
-            def SetColorTemperatureRequest(self):
-                temp = self.payload['colorTemperature']['value']
-                self.entity.set_color_temperature(temp)
-                return {'achievedState': {'colorTemperature': {'value': temp}}}
-
-            def handle_temperature_adj(self, op=None):
-                state = self.ha.get('states/' + self.entity.entity_id)
-                unit = state['attributes']['unit_of_measurement']
-                min_temp = convert_temp(state['attributes']['min_temp'], unit)
-                max_temp = convert_temp(state['attributes']['max_temp'], unit)
-
-                temperature, mode = self.entity.get_temperature(state)
-
-                if op is not None and 'deltaTemperature' in self.payload:
-                    new = op(temperature,
-                             float(self.payload['deltaTemperature']['value']))
-                    # Clamp the allowed temperature for relative adjustments
-                    if temperature != max_temp and temperature != min_temp:
-                        if new < min_temp:
-                            new = min_temp
-                        elif new > max_temp:
-                            new = max_temp
-                else:
-                    new = float(self.payload['targetTemperature']['value'])
-
-                if new > max_temp or new < min_temp:
-                    raise ConnectedHomeCall.ValueOutOfRangeError(min_temp,
-                                                                 max_temp)
-
-                # Only 3 allowed values for mode in this response
-                if mode not in ['AUTO', 'COOL', 'HEAT']:
-                    current = self.entity.get_current_temperature(state)
-                    mode = 'COOL' if current >= new else 'HEAT'
-
-                self.entity.set_temperature(new, mode.lower(), state)
-
-                return {'targetTemperature': {'value': new},
-                        'temperatureMode': {'value': mode},
-                        'previousState': {
-                            'targetTemperature': {'value': temperature},
-                            'mode': {'value': mode}}}
-
-            def SetTargetTemperatureRequest(self):
-                return self.handle_temperature_adj()
-
-            def IncrementTargetTemperatureRequest(self):
-                return self.handle_temperature_adj(operator.add)
-
-            def DecrementTargetTemperatureRequest(self):
-                return self.handle_temperature_adj(operator.sub)
-
-            def SetLockStateRequest(self):
-                self.entity.set_lock_state(self.payload["lockState"])
-                return {'lockState': self.payload["lockState"]}
-
-            def SetColorRequest(self):
-                self.entity.set_color(self.payload['color']['hue'],
-                                      self.payload['color']['saturation'],
-                                      self.payload['color']['brightness'])
-                return {'achievedState': {'color': self.payload['color']}}
-
-        class Query(ConnectedHomeCall):
-            def __init__(self, namespace, name, ha, payload):
-                super(Alexa.ConnectedHome.Query, self).__init__(
-                        namespace, name, ha, payload)
-
-            def GetTemperatureReadingRequest(self):
-                temperature = self.entity.get_current_temperature()
-                return {'temperatureReading': {'value': temperature}}
-
-            def GetTargetTemperatureRequest(self):
-                temperature, mode = self.entity.get_temperature()
-                payload = {'targetTemperature': {'value': temperature},
-                           'temperatureMode': {'value': mode}}
-                if mode not in ['AUTO', 'COOL', 'HEAT', 'OFF']:
-                    payload['temperatureMode'] = {
-                        'value': 'CUSTOM',
-                        'friendlyName': mode.replace('_', ' ').title()}
-                return payload
-
-            def GetLockStateRequest(self):
-                lock_state = self.entity.get_lock_state().upper()
-                return {'lockState': lock_state}
+            
 
 
-def invoke(namespace, name, ha, payload):
+
+def invoke(namespace, name, ha, payload, endpoint):
     class allowed(object):
         Alexa = Alexa
     make_class = operator.attrgetter(namespace)
-    obj = make_class(allowed)(namespace, name, ha, payload)
+    obj = make_class(allowed)(namespace, name, ha, payload, endpoint)
     return obj.invoke(name)
 
 
@@ -324,8 +211,8 @@ def discover_appliances(ha):
             features = x['attributes']['supported_features']
         entity = mk_entity(ha, x['entity_id'], features)
         o = {}
-        # this needs to be unique and has limitations on allowed characters:
-        o['endpointId'] = sha1(x['entity_id'].encode('utf-8')).hexdigest()
+        # this needs to be unique and has limitations on allowed characters ("^[a-zA-Z0-9_\\-=#;:?@&]*$"):
+        o['endpointId'] = x['entity_id'].replace('.', ':')
         o['manufacturerName'] = 'Unknown'
         o['modelName'] = 'Unknown'
         o['displayCategories'] = ['SWITCH']
@@ -353,7 +240,7 @@ def supported_features(payload):
     try:
         details = 'additionalApplianceDetails'
         return payload['appliance'][details]['supported_features']
-    except Exception:
+    except:
         return 0
 
 
@@ -369,13 +256,17 @@ def convert_temp(temp, from_unit=u'°C', to_unit=u'°C'):
 class Entity(object):
     def __init__(self, ha, entity_id, supported_features):
         self.ha = ha
-        self.entity_id = entity_id
+        self.entity_id = entity_id.replace(':', '.')
         self.supported_features = supported_features
         self.entity_domain = self.entity_id.split('.', 1)[0]
 
     def _call_service(self, service, data={}):
         data['entity_id'] = self.entity_id
         self.ha.post('services/' + service, data)
+
+    def get_model_name(self):
+        return None
+
     def get_capabilities(self):
         capabilities = []
         capabilities.append(
@@ -513,46 +404,7 @@ class Entity(object):
                     })
 
         return capabilities
-    
-    def get_actions(self):
-        actions = []
-
-        if hasattr(self, 'turn_on'):
-            actions.append('turnOn')
-        if hasattr(self, 'turn_off'):
-            actions.append('turnOff')
-
-        if hasattr(self, 'set_percentage'):
-            actions.append('setPercentage')
-        if hasattr(self, 'get_percentage'):
-            actions.append('incrementPercentage')
-            actions.append('decrementPercentage')
-
-        if hasattr(self, 'get_current_temperature'):
-            actions.append('getTemperatureReading')
-        if hasattr(self, 'set_temperature'):
-            actions.append('setTargetTemperature')
-        if hasattr(self, 'get_temperature'):
-            actions.append('getTargetTemperature')
-            actions.append('incrementTargetTemperature')
-            actions.append('decrementTargetTemperature')
-
-        if hasattr(self, 'get_lock_state'):
-            actions.append('getLockState')
-        if hasattr(self, 'set_lock_state'):
-            actions.append('setLockState')
-
-        if self.entity_domain == "light":
-            if self.supported_features & LIGHT_SUPPORT_RGB_COLOR:
-                actions.append('setColor')
-            if self.supported_features & LIGHT_SUPPORT_COLOR_TEMP:
-                actions.append('setColorTemperature')
-                actions.append('incrementColorTemperature')
-                actions.append('decrementColorTemperature')
-
-        return actions
-
-
+		
 class ToggleEntity(Entity):
     def turn_on(self):
         self._call_service('homeassistant/turn_on')
@@ -791,24 +643,90 @@ class Configuration(object):
     def dump(self):
         return json.dumps(self.opts, indent=2, separators=(',', ': '))
 
-# Lambda entry point
-def event_handler(event, context):
+
+def directive_handler(directive, context):
     config = Configuration('config.json')
     if config.debug:
         logger.setLevel(logging.DEBUG)
     ha = HomeAssistant(config)
-    version = get_directive_version(event)
-    
-    if version == "3":
-        directive = event['directive']
-        namespace = directive['header']['namespace']
-        name = directive['header']['name']
-        payload = directive.get('payload')
 
-        logger.debug('calling v3 event handler for %s, payload: %s', name, str({k: v for k, v in payload.items()
-                         if k != u'accessToken'}))
-        
-        return invoke(namespace, name, ha, payload)
-    else:
-        logger.debug('calling v2 event handler')
-        return null
+    directive = directive['directive']
+    name = directive['header']['name']
+    namespace = directive['header']['namespace']
+    payload = directive.get('payload')
+    endpoint = directive.get('endpoint')
+
+    logger.debug('calling event handler for %s, payload: %s', name,
+                 str({k: v for k, v in payload.items()
+                     if k != u'accessToken'}))
+
+    return invoke(namespace, name, ha, payload, endpoint)
+
+
+if __name__ == "__main__":
+    discovery_request = {
+        "directive": {
+            "header": {
+                "namespace": "Alexa.Discovery",
+                "name": "Discover",
+                "payloadVersion": "3",
+                "messageId": "1bd5d003-31b9-476f-ad03-71d471922820"
+            },
+            "payload": {
+                "scope": {
+                    "type": "BearerToken",
+                    "token": "access-token-from-skill"
+                }
+            }
+        }
+    }
+
+    rotel_request_on = {
+        "directive": {
+            "header": {
+                "namespace": "Alexa.PowerController",
+                "name": "TurnOn",
+                "payloadVersion": "3",
+                "messageId": "321",
+                "correlationToken": "123"
+            },
+            "endpoint": {
+                "scope": {
+                    "type": "BearerToken",
+                    "token": "access-token-from-skill"
+                },
+                "endpointId": "switch:rotel",
+                "cookie": {}
+            },
+            "payload": {}
+        }
+    }
+    rotel_request_off = {
+        "directive": {
+            "header": {
+                "namespace": "Alexa.PowerController",
+                "name": "TurnOff",
+                "payloadVersion": "3",
+                "messageId": "321",
+                "correlationToken": "123"
+            },
+            "endpoint": {
+                "scope": {
+                    "type": "BearerToken",
+                    "token": "access-token-from-skill"
+                },
+                "endpointId": "switch:rotel",
+                "cookie": {}
+            },
+            "payload": {}
+        }
+    }
+
+    res = directive_handler(rotel_request_off, None)
+
+    # with open('alexa_smart_home_message_schema.json') as f:
+    #     alexa_response_schema = json.load(f)
+    #     v = validate(json.dumps(res), alexa_response_schema)
+    #     print(v)
+    
+    pprint.pprint(res)
