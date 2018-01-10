@@ -1,7 +1,9 @@
 # haaska: Home Assistant Alexa Skill Adapter
 [![Build Status](https://travis-ci.org/mike-grant/haaska.svg?branch=master)](https://travis-ci.org/mike-grant/haaska)
 
-Please note, this is an in-progress fork of HAASKA to update it to support the Amazon Smart Home V3 API
+Please note, this is an in-progress fork of HAASKA to update it to support the Amazon Smart Home V3 API.
+
+Currently merging code from bkryza/haaska and mike-grant/haaska, who both appear to be separately working on an update to v3
 
 haaska implements a bridge between a [Home Assistant](https://home-assistant.io) instance and the [Smart Home Skill API](https://developer.amazon.com/alexa/smart-home) for Amazon's Alexa. It provides voice control for a connected home managed by Home Assistant, through any Alexa-enabled device. Currently, haaska supports the following entity types:
 
