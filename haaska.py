@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3.6
 # coding: utf-8
 
 # Copyright (c) 2015 Michael Auchter <a@phire.org>
@@ -27,11 +27,14 @@ import logging
 import operator
 import requests
 import colorsys
+import datetime
 from hashlib import sha1
 from uuid import uuid4
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 logger = logging.getLogger()
-
 
 LIGHT_SUPPORT_COLOR_TEMP = 2
 LIGHT_SUPPORT_RGB_COLOR = 16
@@ -130,7 +133,7 @@ class Directive(object):
             self.response_name = 'DriverInternalError'
             r['event']['payload'] = {}
 
-        r['event']['header'] = {'namespace': self.namespace,
+            r['event']['header'] = {'namespace': self.namespace,
                        'messageId': str(uuid4()),
                        'name': self.response_name,
                        'payloadVersion': '3',
@@ -161,7 +164,6 @@ class Alexa(object):
                     "timeOfSample": datetime.datetime.utcnow().isoformat(),
                     "uncertaintyInMilliseconds": 200
                 })
-                pass
 
             def TurnOff(self):
                 print("Turning off")
@@ -173,9 +175,21 @@ class Alexa(object):
                     "timeOfSample": datetime.datetime.utcnow().isoformat(),
                     "uncertaintyInMilliseconds": 200
                 })
-                pass
 
-            
+        class BrightnessController(Directive):
+            def AdjustBrightness(self):
+                percentage = self.payload['brightness']
+                self.entity.set_percentage(percentage)
+
+            def SetBrightness(self):
+                delta = self.payload['brightnessDelta']
+                val = self.entity.get_percentage()
+                val += delta
+                if val < 0.0:
+                    val = 0
+                elif val >= 100.0:
+                    val = 100.0
+                self.entity.set_percentage(val)    
 
             
 
@@ -311,7 +325,8 @@ class Entity(object):
                 })
 
 
-        if hasattr(self, 'get_current_temperature') or hasattr(self, 'get_temperature'):
+        if hasattr(self, 'get_current_temperature') or hasattr(
+                                            self, 'get_temperature'):
             capabilities.append(
                 {
                     "type": "AlexaInterface",
@@ -404,7 +419,8 @@ class Entity(object):
                     })
 
         return capabilities
-		
+        
+        
 class ToggleEntity(Entity):
     def turn_on(self):
         self._call_service('homeassistant/turn_on')
@@ -412,7 +428,7 @@ class ToggleEntity(Entity):
     def turn_off(self):
         self._call_service('homeassistant/turn_off')
 
-
+        
 class InputSliderEntity(Entity):
     def get_percentage(self):
         state = self.ha.get('states/' + self.entity_id)
@@ -643,7 +659,7 @@ class Configuration(object):
     def dump(self):
         return json.dumps(self.opts, indent=2, separators=(',', ': '))
 
-
+# Lambda Entry Point
 def directive_handler(directive, context):
     config = Configuration('config.json')
     if config.debug:
@@ -661,72 +677,3 @@ def directive_handler(directive, context):
                      if k != u'accessToken'}))
 
     return invoke(namespace, name, ha, payload, endpoint)
-
-
-if __name__ == "__main__":
-    discovery_request = {
-        "directive": {
-            "header": {
-                "namespace": "Alexa.Discovery",
-                "name": "Discover",
-                "payloadVersion": "3",
-                "messageId": "1bd5d003-31b9-476f-ad03-71d471922820"
-            },
-            "payload": {
-                "scope": {
-                    "type": "BearerToken",
-                    "token": "access-token-from-skill"
-                }
-            }
-        }
-    }
-
-    rotel_request_on = {
-        "directive": {
-            "header": {
-                "namespace": "Alexa.PowerController",
-                "name": "TurnOn",
-                "payloadVersion": "3",
-                "messageId": "321",
-                "correlationToken": "123"
-            },
-            "endpoint": {
-                "scope": {
-                    "type": "BearerToken",
-                    "token": "access-token-from-skill"
-                },
-                "endpointId": "switch:rotel",
-                "cookie": {}
-            },
-            "payload": {}
-        }
-    }
-    rotel_request_off = {
-        "directive": {
-            "header": {
-                "namespace": "Alexa.PowerController",
-                "name": "TurnOff",
-                "payloadVersion": "3",
-                "messageId": "321",
-                "correlationToken": "123"
-            },
-            "endpoint": {
-                "scope": {
-                    "type": "BearerToken",
-                    "token": "access-token-from-skill"
-                },
-                "endpointId": "switch:rotel",
-                "cookie": {}
-            },
-            "payload": {}
-        }
-    }
-
-    res = directive_handler(rotel_request_off, None)
-
-    # with open('alexa_smart_home_message_schema.json') as f:
-    #     alexa_response_schema = json.load(f)
-    #     v = validate(json.dumps(res), alexa_response_schema)
-    #     print(v)
-    
-    pprint.pprint(res)
