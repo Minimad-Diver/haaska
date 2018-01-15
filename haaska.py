@@ -27,7 +27,6 @@ import logging
 import operator
 import requests
 import colorsys
-import datetime
 from hashlib import sha1
 from uuid import uuid4
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -40,6 +39,40 @@ LIGHT_SUPPORT_COLOR_TEMP = 2
 LIGHT_SUPPORT_RGB_COLOR = 16
 LIGHT_SUPPORT_XY_COLOR = 64
 
+DISPLAY_CATEGORIES = {
+    'garage_door': 'SWITCH',
+    'group': 'SWITCH',
+    'input_boolean': 'SWITCH',
+    'input_slider': 'SWITCH',
+    'switch': 'SWITCH',
+    'fan': 'SWITCH',
+    'cover': 'SWITCH',
+    'lock': 'SMARTLOCK',
+    'script': 'ACTIVITY_TRIGGER',
+    'scene': 'SCENE_TRIGGER',
+    'light': 'LIGHT',
+    'media_player': 'TV',
+    'climate': 'THERMOSTAT',
+    'alert': 'OTHER',
+    'automation': 'ACTIVITY_TRIGGER'
+}
+
+ALEXA_INTERFACES = {
+    'BrightnessController': {'directives': ['AdjustBrightness', 'SetBrightness']},
+    'CameraStreamController': {'directives': ['InitializeCameraStreams']},
+    'ColorController': {'directives': ['SetColor']},
+    'ColorTemperatureController': {'directives': ['DecreaseColorTemperature', 'IncreaseColorTemperature', 'SetColorTemperature']},
+    'InputController': {'directives': ['SelectInput']},
+    'LockController': {'directives': ['Lock', 'Unlock']},
+    'PercentageController': {'directives': ['SetPercentage', 'AdjustPercentage']},
+    'PlaybackController': {'directives': ['FastForward', 'Next', 'Pause', 'Play', 'Previous', 'Rewind', 'StartOver', 'Stop']},
+    'PowerController': {'directives': ['TurnOn', 'TurnOff']},
+    'PowerLevelController': {'directives': ['SetPowerLevel', 'AdjustPowerLevel']},
+    'Speaker': {'directives': ['SetVolume', 'AdjustVolume', 'SetMute']},
+    'StepSpeaker': {'directives': ['AdjustVolume', 'SetMute']},
+    'TemperatureSensor': {'directives': ['ReportState']},
+    'ThermostatController': {'directives': ['SetTargetTemperature', 'AdjustTargetTemperature', 'SetThermostatMode']}
+}
 
 class HomeAssistant(object):
     def __init__(self, config):
@@ -104,6 +137,11 @@ class Directive(object):
         logger.debug('invoking %s %s', self.namespace, name)
         r = {'event': {}}
         try:
+            r['event']['header'] = {'namespace': self.namespace,
+                       'name': self.response_name,
+                       'payloadVersion': '3',
+                       'messageId': str(uuid4())}
+            
             payload = operator.attrgetter(name)(self)()
             if payload:
                 r['event']['payload'] = payload
@@ -112,17 +150,7 @@ class Directive(object):
 
             if self.endpoint:
                 r['event']['endpoint'] = self.endpoint
-            # Setup context
-            self.context_properties.append({
-                    "namespace": "Alexa.EndpointHealth",
-                    "name": "connectivity",
-                    "value": {
-                        "value": "OK"
-                    },
-                    "timeOfSample": datetime.datetime.utcnow().isoformat(),
-                    "uncertaintyInMilliseconds": 200
-                })
-            r['context'] = {'properties': self.context_properties}
+            
             logger.debug('response payload: %s', str(r['event']['payload']))
         except Directive.DirectiveException as e:
             logger.exception('handler failed: %s, %s', e.error_name, e.payload)
@@ -133,11 +161,7 @@ class Directive(object):
             self.response_name = 'DriverInternalError'
             r['event']['payload'] = {}
 
-            r['event']['header'] = {'namespace': self.namespace,
-                       'messageId': str(uuid4()),
-                       'name': self.response_name,
-                       'payloadVersion': '3',
-                       'correlationToken': '123'}
+        
         return r
 
 
@@ -228,8 +252,6 @@ def discover_appliances(ha):
         # this needs to be unique and has limitations on allowed characters ("^[a-zA-Z0-9_\\-=#;:?@&]*$"):
         o['endpointId'] = x['entity_id'].replace('.', ':')
         o['manufacturerName'] = 'Unknown'
-        o['modelName'] = 'Unknown'
-        o['displayCategories'] = ['SWITCH']
         if 'haaska_name' in x['attributes']:
             o['friendlyName'] = x['attributes']['haaska_name']
         else:
@@ -237,12 +259,17 @@ def discover_appliances(ha):
             suffix = ha.config.entity_suffixes[entity_domain(x)]
             if suffix != '':
                 o['friendlyName'] += ' ' + suffix
+
         if 'haaska_desc' in x['attributes']:
             o['description'] = x['attributes']['haaska_desc']
         else:
             o['description'] = 'Home Assistant ' + \
                 entity_domain(x).replace('_', ' ').title()
+
+        o['displayCategories'] = [DISPLAY_CATEGORIES[entity_domain(x)]]
+ 
         o['capabilities'] = entity.get_capabilities()
+ 
         return o
 
     states = ha.get('states')
@@ -324,7 +351,6 @@ class Entity(object):
                     }
                 })
 
-
         if hasattr(self, 'get_current_temperature') or hasattr(
                                             self, 'get_temperature'):
             capabilities.append(
@@ -342,7 +368,6 @@ class Entity(object):
                         "retrievable": True
                     }
                 })
-
 
         if hasattr(self, 'set_temperature'):
             capabilities.append(
@@ -417,6 +442,22 @@ class Entity(object):
                             "retrievable": True
                         }
                     })
+
+        capabilities.append(
+            {
+                "type": "AlexaInterface",
+                "interface": "Alexa.EndpointHealth",
+                "version": "3",
+                "properties": {
+                    "supported": [
+                        {
+                            "name": "connectivity"
+                        }
+                    ],
+                    "proactivelyReported": True,
+                    "retrievable": True
+                }
+            })            
 
         return capabilities
         
