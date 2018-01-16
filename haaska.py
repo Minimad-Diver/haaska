@@ -27,7 +27,7 @@ import logging
 import operator
 import requests
 import colorsys
-from hashlib import sha1
+import datetime
 from uuid import uuid4
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
@@ -110,8 +110,11 @@ class HomeAssistant(object):
                          relurl)
         return r
 
-class Directive(object):
+
+class ConnectedHomeCall(object):
     def __init__(self, namespace, name, ha, payload, endpoint):
+        logger.debug('Building connected home call %s, %s, %s', namespace,
+                     name, payload)
         self.namespace = namespace
         self.name = name
         self.response_name = self.name + '.Response'
@@ -121,14 +124,15 @@ class Directive(object):
         self.entity = None
         self.context_properties = []
         if self.endpoint and ('endpointId' in self.endpoint):
-            self.entity = mk_entity(ha, self.endpoint['endpointId'].replace(':', '.'))
+            self.entity = mk_entity(ha, self.endpoint['endpointId']
+                                    .replace(':', '.'))
 
-    class DirectiveException(Exception):
+    class ConnectedHomeException(Exception):
         def __init__(self, name="DriverInternalError", payload={}):
             self.error_name = name
             self.payload = payload
 
-    class ValueOutOfRangeError(DirectiveException):
+    class ValueOutOfRangeError(ConnectedHomeException):
         def __init__(self, minValue, maxValue):
             self.error_name = 'ValueOutOfRangeError'
             self.payload = {'minimumValue': minValue, 'maximumValue': maxValue}
@@ -152,7 +156,7 @@ class Directive(object):
                 r['event']['endpoint'] = self.endpoint
             
             logger.debug('response payload: %s', str(r['event']['payload']))
-        except Directive.DirectiveException as e:
+        except ConnectedHomeCall.ConnectedHomeException as e:
             logger.exception('handler failed: %s, %s', e.error_name, e.payload)
             self.response_name = e.error_name
             r['event']['payload'] = e.payload
@@ -165,85 +169,134 @@ class Directive(object):
 
 
 class Alexa(object):
-        class Discovery(Directive):
-            def Discover(self):
-                try:
-                    return {'endpoints': discover_appliances(self.ha)}                            
-                except Exception:
-                    logger.exception('DiscoverAppliancesRequest failed')
-                    return {'discoveredAppliances': {}}
+    class Discovery(ConnectedHomeCall):
+        def Discover(self):
+            try:
+                return {'endpoints': discover_appliances(self.ha)}
+            except Exception:
+                logger.exception('v3 DiscoverAppliancesRequest failed')
 
-        class PowerController(Directive):
-            def TurnOn(self):
-                print("Turning on")
-                self.entity.turn_on()
-                self.context_properties.append({
-                    "namespace": "Alexa.PowerController",
-                    "name": "powerState",
-                    "value": "ON",
-                    "timeOfSample": datetime.datetime.utcnow().isoformat(),
-                    "uncertaintyInMilliseconds": 200
-                })
+    class PowerController(ConnectedHomeCall):
+        def TurnOn(self):
+            self.entity.turn_on()
+            self.context_properties.append({
+                "namespace": "Alexa.PowerController",
+                "name": "powerState",
+                "value": "ON",
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
 
-            def TurnOff(self):
-                print("Turning off")
-                self.entity.turn_off()
-                self.context_properties.append({
-                    "namespace": "Alexa.PowerController",
-                    "name": "powerState",
-                    "value": "OFF",
-                    "timeOfSample": datetime.datetime.utcnow().isoformat(),
-                    "uncertaintyInMilliseconds": 200
-                })
+        def TurnOff(self):
+            self.entity.turn_off()
+            self.context_properties.append({
+                "namespace": "Alexa.PowerController",
+                "name": "powerState",
+                "value": "OFF",
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
 
-        class BrightnessController(Directive):
-            def AdjustBrightness(self):
-                percentage = self.payload['brightness']
-                self.entity.set_percentage(percentage)
+    class BrightnessController(ConnectedHomeCall):
+        def AdjustBrightness(self):
+            percentage = self.payload['brightness']
+            self.entity.set_percentage(percentage)
+            self.context_properties.append({
+                "namespace": "Alexa.BrightnessController",
+                "name": "brightness",
+                "value": percentage,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
 
-            def SetBrightness(self):
-                delta = self.payload['brightnessDelta']
-                val = self.entity.get_percentage()
-                val += delta
-                if val < 0.0:
-                    val = 0
-                elif val >= 100.0:
-                    val = 100.0
-                self.entity.set_percentage(val)    
+        def SetBrightness(self):
+            delta = self.payload['brightnessDelta']
+            val = self.entity.get_percentage()
+            val += delta
+            if val < 0.0:
+                val = 0
+            elif val >= 100.0:
+                val = 100.0
+            self.entity.set_percentage(val)
+            self.context_properties.append({
+                "namespace": "Alexa.BrightnessController",
+                "name": "brightness",
+                "value": val,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
 
-        class PercentageController(Directive):
-            def AdjustPercentage(self):
-                percentage = self.payload['percentage']
-                self.entity.set_percentage(percentage)
+    class PercentageController(ConnectedHomeCall):
+        def SetPercentage(self):
+            percentage = self.payload['percentage']
+            self.entity.set_percentage(percentage)
+            self.context_properties.append({
+                "namespace": "Alexa.PercentageController",
+                "name": "percentage",
+                "value": percentage,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
 
-            def SetPercentage(self):
-                delta = self.payload['percentageDelta']
-                val = self.entity.get_percentage()
-                val += delta
-                if val < 0.0:
-                    val = 0
-                elif val >= 100.0:
-                    val = 100.0
-                self.entity.set_percentage(val)
-                
-        class ColorController(Directive):
-            def SetColor(self):
-            
-        class PowerLevelController(Directive):
-        
-        class ColorTemperatureController(Directive):
-        
-                
-                
-               
-            
+        def AdjustPercentage(self):
+            delta = self.payload['percentageDelta']
+            val = self.entity.get_percentage()
+            val += delta
+            if val < 0.0:
+                val = 0
+            elif val >= 100.0:
+                val = 100.0
+            self.entity.set_percentage(val)
+            self.context_properties.append({
+                "namespace": "Alexa.PercentageController",
+                "name": "percentage",
+                "value": val,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
 
+    class ColorTemperatureController(ConnectedHomeCall):
+        def DecreaseColorTemperature(self):
+            current = self.entity.get_color_temperature()
+            new = current - 500
+            self.entity.set_color_temperature(new)
+            self.context_properties.append({
+                "namespace": "Alexa.ColorTemperatureController",
+                "name": "colorTemperatureInKelvin",
+                "value": new,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
 
+        def IncreaseColorTemperature(self):
+            current = self.entity.get_color_temperature()
+            new = current + 500
+            self.entity.set_color_temperature(new)
+            self.context_properties.append({
+                "namespace": "Alexa.ColorTemperatureController",
+                "name": "colorTemperatureInKelvin",
+                "value": new,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
 
+        def SetColorTemperature(self):
+            temp = self.payload['colorTemperatureInKelvin']
+            self.entity.set_color_temperature(temp)
+            self.context_properties.append({
+                "namespace": "Alexa.ColorTemperatureController",
+                "name": "colorTemperatureInKelvin",
+                "value": temp,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
+ 
 def invoke(namespace, name, ha, payload, endpoint):
     class allowed(object):
         Alexa = Alexa
     make_class = operator.attrgetter(namespace)
+    logger.debug('Calling invoke %s, %s, %s, %s, %s', namespace, name, ha,
+                 payload, endpoint)
     obj = make_class(allowed)(namespace, name, ha, payload, endpoint)
     return obj.invoke(name)
 
@@ -302,7 +355,8 @@ def supported_features(payload):
     try:
         details = 'additionalApplianceDetails'
         return payload['appliance'][details]['supported_features']
-    except:
+    except Exception:
+
         return 0
 
 
@@ -373,7 +427,7 @@ class Entity(object):
                 })
 
         if hasattr(self, 'get_current_temperature') or hasattr(
-                                            self, 'get_temperature'):
+                                           self, 'get_temperature'):
             capabilities.append(
                 {
                     "type": "AlexaInterface",
@@ -677,6 +731,7 @@ DOMAINS = {
 
 def mk_entity(ha, entity_id, supported_features=0):
     entity_domain = entity_id.split('.', 1)[0]
+    logger.debug('Making entity w/ domain: %s', entity_domain)
     return DOMAINS[entity_domain](ha, entity_id, supported_features)
 
 
@@ -722,13 +777,13 @@ class Configuration(object):
         return json.dumps(self.opts, indent=2, separators=(',', ': '))
 
 # Lambda Entry Point
-def directive_handler(directive, context):
+def event_handler(event, context):
     config = Configuration('config.json')
     if config.debug:
         logger.setLevel(logging.DEBUG)
     ha = HomeAssistant(config)
 
-    directive = directive['directive']
+    directive = event['directive']
     name = directive['header']['name']
     namespace = directive['header']['namespace']
     payload = directive.get('payload')
