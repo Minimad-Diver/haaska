@@ -290,6 +290,7 @@ class Alexa(object):
                 "timeOfSample": datetime.datetime.utcnow().isoformat(),
                 "uncertaintyInMilliseconds": 200
             })
+
     class PowerLevelController(ConnectedHomeCall):
         def AdjustPowerLevel(self):
             percentage = self.payload['powerLevel']
@@ -318,6 +319,57 @@ class Alexa(object):
                 "timeOfSample": datetime.datetime.utcnow().isoformat(),
                 "uncertaintyInMilliseconds": 200
             })
+
+    class ThermostatController(ConnectedHomeCall):
+        def SetTargetTemperature(self):
+            targetSetpoint = self.payload['targetSetpoint']
+            self.context_properties.append({
+                "namespace": "Alexa.ThermostatController",
+                "name": "targetSetpoint",
+                "value": {
+                    "value": targetSetpoint,
+                    "scale": "CELSIUS"
+                },
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
+            self.context_properties.append({
+                "namespace": "Alexa.ThermostatController",
+                "name": "thermostatMode",
+                "value": "HEAT",
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
+            
+        def AdjustTargetTemperature(self):
+            self.context_properties.append({
+                "namespace": "Alexa.ThermostatController",
+                "name": "targetSetpoint",
+                "value": val,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
+            
+        def SetThermostatMode(self):
+            self.context_properties.append({
+                "namespace": "Alexa.ThermostatController",
+                "name": "targetSetpoint",
+                "value": val,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
+        
+        
+        
+        def SetTargetTemperatureRequest(self):
+                return self.handle_temperature_adj()
+
+            def IncrementTargetTemperatureRequest(self):
+                return self.handle_temperature_adj(operator.add)
+
+            def DecrementTargetTemperatureRequest(self):
+                return self.handle_temperature_adj(operator.sub)
+        
  
 def invoke(namespace, name, ha, payload, endpoint):
     class allowed(object):
