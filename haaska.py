@@ -161,7 +161,6 @@ class Directive(object):
             self.response_name = 'DriverInternalError'
             r['event']['payload'] = {}
 
-        
         return r
 
 
@@ -172,9 +171,6 @@ class Alexa(object):
                     return {'endpoints': discover_appliances(self.ha)}                            
                 except Exception:
                     logger.exception('DiscoverAppliancesRequest failed')
-                    # v2 documentation is unclear as to what should be returned
-                    # here if discovery fails, so in the mean-time, just return
-                    # 0 devices and log the error
                     return {'discoveredAppliances': {}}
 
         class PowerController(Directive):
@@ -215,6 +211,31 @@ class Alexa(object):
                     val = 100.0
                 self.entity.set_percentage(val)    
 
+        class PercentageController(Directive):
+            def AdjustPercentage(self):
+                percentage = self.payload['percentage']
+                self.entity.set_percentage(percentage)
+
+            def SetPercentage(self):
+                delta = self.payload['percentageDelta']
+                val = self.entity.get_percentage()
+                val += delta
+                if val < 0.0:
+                    val = 0
+                elif val >= 100.0:
+                    val = 100.0
+                self.entity.set_percentage(val)
+                
+        class ColorController(Directive):
+            def SetColor(self):
+            
+        class PowerLevelController(Directive):
+        
+        class ColorTemperatureController(Directive):
+        
+                
+                
+               
             
 
 
