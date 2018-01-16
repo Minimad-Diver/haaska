@@ -290,6 +290,34 @@ class Alexa(object):
                 "timeOfSample": datetime.datetime.utcnow().isoformat(),
                 "uncertaintyInMilliseconds": 200
             })
+    class PowerLevelController(ConnectedHomeCall):
+        def AdjustPowerLevel(self):
+            percentage = self.payload['powerLevel']
+            self.entity.set_percentage(percentage)
+            self.context_properties.append({
+                "namespace": "Alexa.PowerLevelController",
+                "name": "powerLevel",
+                "value": percentage,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
+
+        def SetPowerLevel(self):
+            delta = self.payload['powerLevelDelta']
+            val = self.entity.get_percentage()
+            val += delta
+            if val < 0.0:
+                val = 0
+            elif val >= 100.0:
+                val = 100.0
+            self.entity.set_percentage(val)
+            self.context_properties.append({
+                "namespace": "Alexa.PowerLevelController",
+                "name": "powerLevel",
+                "value": val,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
  
 def invoke(namespace, name, ha, payload, endpoint):
     class allowed(object):
