@@ -599,13 +599,6 @@ class Entity(object):
                         "retrievable": True
                     }
                 })
-        
-        if hasattr(self, 'set_temperature'):
-            actions.append('setTargetTemperature')
-        if hasattr(self, 'get_temperature'):
-            actions.append('getTargetTemperature')
-            actions.append('incrementTargetTemperature')
-            actions.append('decrementTargetTemperature')
 
         if hasattr(self, 'get_lock_state') or hasattr(self, 'set_lock_state'):
             capabilities.append(
