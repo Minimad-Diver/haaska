@@ -322,55 +322,111 @@ class Alexa(object):
 
     class ThermostatController(ConnectedHomeCall):
         def SetTargetTemperature(self):
-            targetSetpoint = self.payload['targetSetpoint']
+            state = self.ha.get('states/' + self.entity.entity_id)
+            unit = state['attributes']['unit_of_measurement']
+            min_temp = convert_temp(state['attributes']['min_temp'], unit)
+            max_temp = convert_temp(state['attributes']['max_temp'], unit)
+            temperature, mode = self.entity.get_temperature(state)
+            
+            new_temp = float(self.payload['targetSetpoint']['value'])
+            
+            if new_temp > max_temp or new_temp < min_temp:
+                raise ConnectedHomeCall.ValueOutOfRangeError(min_temp,max_temp)
+                    
+            # Only 4 allowed values for mode in this response
+            if mode not in ['AUTO', 'COOL', 'ECO', 'HEAT']:
+                current = self.entity.get_current_temperature(state)
+                mode = 'COOL' if current >= new_temp else 'HEAT'
+            
+            self.entity.set_temperature(new_temp, mode.lower(), state)
+                            
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "targetSetpoint",
-                "value": {
-                    "value": targetSetpoint,
-                    "scale": "CELSIUS"
-                },
+                "value": new_temp,
                 "timeOfSample": datetime.datetime.utcnow().isoformat(),
                 "uncertaintyInMilliseconds": 200
             })
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "thermostatMode",
-                "value": "HEAT",
+                "value": mode,
                 "timeOfSample": datetime.datetime.utcnow().isoformat(),
                 "uncertaintyInMilliseconds": 200
             })
             
         def AdjustTargetTemperature(self):
+            state = self.ha.get('states/' + self.entity.entity_id)
+            unit = state['attributes']['unit_of_measurement']
+            min_temp = convert_temp(state['attributes']['min_temp'], unit)
+            max_temp = convert_temp(state['attributes']['max_temp'], unit)
+            temperature, mode = self.entity.get_temperature(state)
+        
+            new_temp = op(temperature,float(self.payload['targetSetpointDelta']['value']))
+            # Clamp the allowed temperature for relative adjustments
+            if temperature != max_temp and temperature != min_temp:
+                if new_temp < min_temp:
+                    new_temp = min_temp
+                elif new_temp > max_temp:
+                    new_temp = max_temp
+        
+            if new_temp > max_temp or new_temp < min_temp:
+                raise ConnectedHomeCall.ValueOutOfRangeError(min_temp,max_temp)
+        
+            # Only 4 allowed values for mode in this response
+            if mode not in ['AUTO', 'COOL', 'ECO', 'HEAT']:
+                current = self.entity.get_current_temperature(state)
+                mode = 'COOL' if current >= new_temp else 'HEAT'
+            
+            self.entity.set_temperature(new_temp, mode.lower(), state)
+                            
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "targetSetpoint",
-                "value": val,
+                "value": new_temp,
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
+            self.context_properties.append({
+                "namespace": "Alexa.ThermostatController",
+                "name": "thermostatMode",
+                "value": mode,
                 "timeOfSample": datetime.datetime.utcnow().isoformat(),
                 "uncertaintyInMilliseconds": 200
             })
             
         def SetThermostatMode(self):
+            mode = self.payload['thermostatMode']
+            
+            if mode in ['AUTO', 'COOL', 'ECO', 'HEAT']:
+                self.entity.turn_on
+            else:
+                self.entity.turn_off
+            
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
-                "name": "targetSetpoint",
-                "value": val,
+                "name": "thermostatMode",
+                "value": mode,
                 "timeOfSample": datetime.datetime.utcnow().isoformat(),
                 "uncertaintyInMilliseconds": 200
             })
-        
-        
-        
-        def SetTargetTemperatureRequest(self):
-                return self.handle_temperature_adj()
 
-            def IncrementTargetTemperatureRequest(self):
-                return self.handle_temperature_adj(operator.add)
-
-            def DecrementTargetTemperatureRequest(self):
-                return self.handle_temperature_adj(operator.sub)
-        
- 
+    class TemperatureSensor(ConnectedHomeCall):
+        def ReportState(self):
+            state = self.ha.get('states/' + self.entity.entity_id)
+            unit = state['attributes']['unit_of_measurement']
+            temperature = self.entity.get_temperature(state)
+            self.context_properties.append({
+                "namespace": "Alexa.TemperatureSensor",
+                "name": "temperature",
+                "value": {
+                    "value": temperature,
+                    "scale": unit
+                },
+                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "uncertaintyInMilliseconds": 200
+            })
+    
 def invoke(namespace, name, ha, payload, endpoint):
     class allowed(object):
         Alexa = Alexa
@@ -533,10 +589,7 @@ class Entity(object):
                     "properties": {
                         "supported": [
                             {
-                                "name": "upperSetpoint"
-                            },
-                            {
-                                "name": "lowerSetpoint"
+                                "name": "targetSetpoint"
                             },
                             {
                                 "name": "thermostatMode"
@@ -546,6 +599,13 @@ class Entity(object):
                         "retrievable": True
                     }
                 })
+        
+        if hasattr(self, 'set_temperature'):
+            actions.append('setTargetTemperature')
+        if hasattr(self, 'get_temperature'):
+            actions.append('getTargetTemperature')
+            actions.append('incrementTargetTemperature')
+            actions.append('decrementTargetTemperature')
 
         if hasattr(self, 'get_lock_state') or hasattr(self, 'set_lock_state'):
             capabilities.append(
