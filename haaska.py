@@ -28,12 +28,17 @@ import operator
 import requests
 import colorsys
 import datetime
-from uuid import uuid4
+import uuid
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
+# Imports for v3 validation
+#from validation import validate_message
 
+# Disable warning about Insecure Request
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
+# Setup logger
 logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 LIGHT_SUPPORT_COLOR_TEMP = 2
 LIGHT_SUPPORT_RGB_COLOR = 16
@@ -112,12 +117,15 @@ class HomeAssistant(object):
 
 
 class ConnectedHomeCall(object):
-    def __init__(self, namespace, name, ha, payload, endpoint):
-        logger.debug('Building connected home call %s, %s, %s', namespace,
+    def __init__(self, namespace, name, ha, payload, endpoint, correlationToken):
+        logger.debug('Building ConnectedHomeCall %s, %s, %s', namespace,
                      name, payload)
         self.namespace = namespace
         self.name = name
-        self.response_name = self.name + '.Response'
+        if name == 'ReportState':
+            self.response_name = 'StateReport'
+        else:
+            self.response_name = self.name + '.Response'
         self.ha = ha
         self.payload = payload
         self.endpoint = endpoint
@@ -126,6 +134,7 @@ class ConnectedHomeCall(object):
         if self.endpoint and ('endpointId' in self.endpoint):
             self.entity = mk_entity(ha, self.endpoint['endpointId']
                                     .replace(':', '.'))
+        self.correlationToken = correlationToken
 
     class ConnectedHomeException(Exception):
         def __init__(self, name="DriverInternalError", payload={}):
@@ -138,37 +147,90 @@ class ConnectedHomeCall(object):
             self.payload = {'minimumValue': minValue, 'maximumValue': maxValue}
 
     def invoke(self, name):
-        logger.debug('invoking %s %s', self.namespace, name)
+        logger.debug('invoking ConnectedHomeCall %s %s', self.namespace, name)
         r = {'event': {}}
         try:
             r['event']['header'] = {'namespace': self.namespace,
                        'name': self.response_name,
                        'payloadVersion': '3',
-                       'messageId': str(uuid4())}
+                       'messageId': get_uuid(),
+                       "correlationToken": self.correlationToken}
             
             payload = operator.attrgetter(name)(self)()
             if payload:
                 r['event']['payload'] = payload
             else:
                 r['event']['payload'] = {}
-
+            
             if self.endpoint:
                 r['event']['endpoint'] = self.endpoint
             
             logger.debug('response payload: %s', str(r['event']['payload']))
         except ConnectedHomeCall.ConnectedHomeException as e:
-            logger.exception('handler failed: %s, %s', e.error_name, e.payload)
+            logger.exception('ConnectedHomeCall failed: %s, %s', e.error_name, e.payload)
             self.response_name = e.error_name
             r['event']['payload'] = e.payload
         except Exception:
-            logger.exception('handler failed unexpectedly')
+            logger.exception('ConnectedHomeCall failed unexpectedly')
             self.response_name = 'DriverInternalError'
             r['event']['payload'] = {}
-
+        
         return r
 
 
 class Alexa(object):
+    class ReportState(ConnectedHomeCall):
+        def __init__(self, namespace, name, ha, payload, endpoint, correlationToken):
+            # Probably have to process on state retreived
+            # but for now just just return a temperature
+            logger.info("ReportState")
+            if hasattr(self, 'get_current_temperature'):
+                state = self.ha.get('states/' + self.entity.entity_id)
+                unit = state['attributes']['unit_of_measurement']
+                temperature = self.entity.get_current_temperature(state)
+                self.context_properties.append({
+                    "namespace": "Alexa.TemperatureSensor",
+                    "name": "temperature",
+                    "value": {
+                        "value": temperature,
+                        "scale": unit
+                    },
+                    "timeOfSample": get_utc_timestamp(),
+                    "uncertaintyInMilliseconds": 200
+                })
+            if hasattr(self, 'get_temperature'):
+                state = self.ha.get('states/' + self.entity.entity_id)
+                unit = state['attributes']['unit_of_measurement']
+                temperature, mode = self.entity.get_temperature(state)
+                self.context_properties.append({
+                    "namespace": "Alexa.TemperatureSensor",
+                    "name": "temperature",
+                    "value": {
+                        "value": temperature,
+                        "scale": unit
+                    },
+                    "timeOfSample": get_utc_timestamp(),
+                    "uncertaintyInMilliseconds": 200
+                })
+            if hasattr(self, 'get_lock_state'):
+                state = self.entity.get_lock_state().upper()
+                self.context_properties.append({
+                    "namespace": "Alexa.LockController",
+                    "name": "lockState",
+                    "value": state,
+                    "timeOfSample": get_utc_timestamp(),
+                    "uncertaintyInMilliseconds": 200
+                })
+                self.context_properties.append({
+                    "namespace": "Alexa.EndpointHealth",
+                    "name": "connectivity",
+                    "value": {
+                        "value": "OK"
+                    },
+                    "timeOfSample": get_utc_timestamp(),
+                    "uncertaintyInMilliseconds": 200
+                })
+
     class Discovery(ConnectedHomeCall):
         def Discover(self):
             try:
@@ -183,7 +245,7 @@ class Alexa(object):
                 "namespace": "Alexa.PowerController",
                 "name": "powerState",
                 "value": "ON",
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -193,7 +255,7 @@ class Alexa(object):
                 "namespace": "Alexa.PowerController",
                 "name": "powerState",
                 "value": "OFF",
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -205,7 +267,7 @@ class Alexa(object):
                 "namespace": "Alexa.BrightnessController",
                 "name": "brightness",
                 "value": percentage,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -222,7 +284,7 @@ class Alexa(object):
                 "namespace": "Alexa.BrightnessController",
                 "name": "brightness",
                 "value": val,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -234,7 +296,7 @@ class Alexa(object):
                 "namespace": "Alexa.PercentageController",
                 "name": "percentage",
                 "value": percentage,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -251,7 +313,7 @@ class Alexa(object):
                 "namespace": "Alexa.PercentageController",
                 "name": "percentage",
                 "value": val,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -264,7 +326,7 @@ class Alexa(object):
                 "namespace": "Alexa.ColorTemperatureController",
                 "name": "colorTemperatureInKelvin",
                 "value": new,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -276,7 +338,7 @@ class Alexa(object):
                 "namespace": "Alexa.ColorTemperatureController",
                 "name": "colorTemperatureInKelvin",
                 "value": new,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -287,7 +349,7 @@ class Alexa(object):
                 "namespace": "Alexa.ColorTemperatureController",
                 "name": "colorTemperatureInKelvin",
                 "value": temp,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -299,7 +361,7 @@ class Alexa(object):
                 "namespace": "Alexa.PowerLevelController",
                 "name": "powerLevel",
                 "value": percentage,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -316,7 +378,7 @@ class Alexa(object):
                 "namespace": "Alexa.PowerLevelController",
                 "name": "powerLevel",
                 "value": val,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -344,14 +406,14 @@ class Alexa(object):
                 "namespace": "Alexa.ThermostatController",
                 "name": "targetSetpoint",
                 "value": new_temp,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "thermostatMode",
                 "value": mode,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
             
@@ -384,14 +446,14 @@ class Alexa(object):
                 "namespace": "Alexa.ThermostatController",
                 "name": "targetSetpoint",
                 "value": new_temp,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "thermostatMode",
                 "value": mode,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
             
@@ -407,7 +469,7 @@ class Alexa(object):
                 "namespace": "Alexa.ThermostatController",
                 "name": "thermostatMode",
                 "value": mode,
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
@@ -423,19 +485,19 @@ class Alexa(object):
                     "value": temperature,
                     "scale": unit
                 },
-                "timeOfSample": datetime.datetime.utcnow().isoformat(),
+                "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
-    
-def invoke(namespace, name, ha, payload, endpoint):
+
+
+def invoke(namespace, name, ha, payload, endpoint, correlationToken):
     class allowed(object):
         Alexa = Alexa
     make_class = operator.attrgetter(namespace)
-    logger.debug('Calling invoke %s, %s, %s, %s, %s', namespace, name, ha,
-                 payload, endpoint)
-    obj = make_class(allowed)(namespace, name, ha, payload, endpoint)
+    logger.debug('Calling invoke %s, %s, %s, %s, %s, %s', namespace, name, ha,
+                 payload, endpoint, correlationToken)
+    obj = make_class(allowed)(namespace, name, ha, payload, endpoint, correlationToken)
     return obj.invoke(name)
-
 
 def discover_appliances(ha):
     def entity_domain(x):
@@ -486,7 +548,6 @@ def discover_appliances(ha):
     return [mk_appliance(x) for x in states if is_supported_entity(x) and
             is_exposed_entity(x)]
 
-
 def supported_features(payload):
     try:
         details = 'additionalApplianceDetails'
@@ -495,7 +556,6 @@ def supported_features(payload):
 
         return 0
 
-
 def convert_temp(temp, from_unit=u'°C', to_unit=u'°C'):
     if temp is None or from_unit == to_unit:
         return temp
@@ -503,6 +563,17 @@ def convert_temp(temp, from_unit=u'°C', to_unit=u'°C'):
         return temp * 1.8 + 32
     else:
         return (temp - 32) / 1.8
+
+def get_utc_timestamp():
+    return datetime.datetime.utcnow().isoformat()
+
+def get_uuid():
+    return str(uuid.uuid4())
+
+def mk_entity(ha, entity_id, supported_features=0):
+    entity_domain = entity_id.split('.', 1)[0]
+    logger.debug('Making entity w/ domain: %s', entity_domain)
+    return DOMAINS[entity_domain](ha, entity_id, supported_features)
 
 
 class Entity(object):
@@ -599,7 +670,7 @@ class Entity(object):
                         "retrievable": True
                     }
                 })
-
+        
         if hasattr(self, 'get_lock_state') or hasattr(self, 'set_lock_state'):
             capabilities.append(
                 {
@@ -668,8 +739,8 @@ class Entity(object):
             })            
 
         return capabilities
-        
-        
+
+
 class ToggleEntity(Entity):
     def turn_on(self):
         self._call_service('homeassistant/turn_on')
@@ -677,7 +748,7 @@ class ToggleEntity(Entity):
     def turn_off(self):
         self._call_service('homeassistant/turn_off')
 
-        
+
 class InputSliderEntity(Entity):
     def get_percentage(self):
         state = self.ha.get('states/' + self.entity_id)
@@ -862,12 +933,6 @@ DOMAINS = {
 }
 
 
-def mk_entity(ha, entity_id, supported_features=0):
-    entity_domain = entity_id.split('.', 1)[0]
-    logger.debug('Making entity w/ domain: %s', entity_domain)
-    return DOMAINS[entity_domain](ha, entity_id, supported_features)
-
-
 class Configuration(object):
     def __init__(self, filename=None, optsDict=None):
         self._json = {}
@@ -909,21 +974,40 @@ class Configuration(object):
     def dump(self):
         return json.dumps(self.opts, indent=2, separators=(',', ': '))
 
-# Lambda Entry Point
-def event_handler(event, context):
-    config = Configuration('config.json')
-    if config.debug:
-        logger.setLevel(logging.DEBUG)
-    ha = HomeAssistant(config)
-
-    directive = event['directive']
-    name = directive['header']['name']
-    namespace = directive['header']['namespace']
-    payload = directive.get('payload')
-    endpoint = directive.get('endpoint')
-
-    logger.debug('calling event handler for %s, payload: %s', name,
+def request_handler(request, context):
+    #Main Lambda handler.
+    #Only expects v3 requests (as we are only user) so no neeed to handle v2 requests
+    try:
+        config = Configuration('config.json')
+        if config.debug:
+            logger.setLevel(logging.DEBUG)
+        
+        ha = HomeAssistant(config)
+        
+        logger.info('Directive:')
+        logger.info(json.dumps(request, indent=4, sort_keys=True))
+        
+        directive = request['directive']
+        name = directive['header']['name']
+        namespace = directive['header']['namespace']
+        payload = directive.get('payload')
+        endpoint = directive.get('endpoint')
+        correlationToken = directive.get('correlationToken')
+        
+        logger.info('calling request_handler for %s, payload: %s', name,
                  str({k: v for k, v in payload.items()
-                     if k != u'accessToken'}))
-
-    return invoke(namespace, name, ha, payload, endpoint)
+                    if k != u'accessToken'}))
+        
+        response = invoke(namespace, name, ha, payload, endpoint, correlationToken)
+        
+        logger.info("Response:")
+        logger.info(json.dumps(response, indent=4, sort_keys=True))
+        
+        logger.info("Validate response")
+        #validate_message(request, response)
+        
+        return response
+        
+    except ValueError as error:
+        logger.error(error)
+        raise
