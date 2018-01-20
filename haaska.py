@@ -164,7 +164,9 @@ class ConnectedHomeCall(object):
                 r['event']['payload'] = {}
 
             if self.endpoint:
-                r['event']['endpoint'] = self.endpoint
+                r['event']['endpoint'] = {
+                    "endpointId": self.endpoint['endpointId']
+                    } 
                 
             if self.context_properties:
                 r['context'] = {"properties": self.context_properties }
@@ -231,25 +233,28 @@ class Alexa(object):
                     "timeOfSample": get_utc_timestamp(),
                     "uncertaintyInMilliseconds": 200
                 })
-            #if hasattr(self.entity, 'turn_on'):
-            #    state = self.ha.get('states/' + self.entity.entity_id)
-            #    unit = state.get('state')
-            #    self.context_properties.append({
-            #        "namespace": "Alexa.PowerControllerController",
-            #        "name": "powerState",
-            #        "value": unit.upper(),
-            #        "timeOfSample": get_utc_timestamp(),
-            #        "uncertaintyInMilliseconds": 200
-            #    })
-            #self.context_properties.append({
-            #    "namespace": "Alexa.EndpointHealth",
-            #    "name": "connectivity",
-            #    "value": {
-            #        "value": "OK"
-            #    },
-            #    "timeOfSample": get_utc_timestamp(),
-            #    "uncertaintyInMilliseconds": 200
-            #})
+            
+            if (hasattr(self.entity, 'turn_on') or hasattr(self.entity, 'turn_off')) and not hasattr(self.entity, 'get_temperature'):
+                state = self.ha.get('states/' + self.entity.entity_id)
+                unit = state.get('state')
+                self.context_properties.append({
+                    "namespace": "Alexa.PowerController",
+                    "name": "powerState",
+                    "value": unit.upper(),
+                    "timeOfSample": get_utc_timestamp(),
+                    "uncertaintyInMilliseconds": 200
+                })
+            
+            # Report EndpointHealth for ALL items
+            self.context_properties.append({
+                "namespace": "Alexa.EndpointHealth",
+                "name": "connectivity",
+                "value": {
+                    "value": "OK"
+                },
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
 
     class Discovery(ConnectedHomeCall):
         def Discover(self):
@@ -614,7 +619,8 @@ def get_temp_scale(unit):
         return 'FAHRENHEIT'
 
 def get_utc_timestamp():
-    return datetime.datetime.utcnow().isoformat()
+    #return datetime.datetime.utcnow().isoformat()
+    return datetime.datetime.strftime(datetime.datetime.utcnow(), "%Y-%m-%dT%H:%M:%S.%f")[:-4] + "Z"
 
 def get_uuid():
     return str(uuid.uuid4())
