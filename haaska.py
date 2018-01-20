@@ -104,14 +104,14 @@ class HomeAssistant(object):
         read_timeout = None if wait else 0.01
         r = None
         try:
-            logger.debug('calling %s with %s', relurl, str(d))
+            logger.debug('HA post calling %s with %s', relurl, str(d))
             r = self.session.post(self.build_url(relurl),
                                   data=json.dumps(d),
                                   timeout=(None, read_timeout))
             r.raise_for_status()
         except requests.exceptions.ReadTimeout:
             # Allow response timeouts after request was sent
-            logger.debug('request for %s sent without waiting for response',
+            logger.debug('HA post for %s sent without waiting for response',
                          relurl)
         return r
 
@@ -124,6 +124,7 @@ class ConnectedHomeCall(object):
         self.name = name
         if name == 'ReportState':
             self.response_name = 'StateReport'
+            self.namespace = 'Alexa'
         else:
             self.response_name = self.name + '.Response'
         self.ha = ha
@@ -161,9 +162,12 @@ class ConnectedHomeCall(object):
                 r['event']['payload'] = payload
             else:
                 r['event']['payload'] = {}
-            
+
             if self.endpoint:
                 r['event']['endpoint'] = self.endpoint
+                
+            if self.context_properties:
+                r['context'] = {"properties": self.context_properties }
             
             logger.debug('response payload: %s', str(r['event']['payload']))
         except ConnectedHomeCall.ConnectedHomeException as e:
@@ -174,62 +178,78 @@ class ConnectedHomeCall(object):
             logger.exception('ConnectedHomeCall failed unexpectedly')
             self.response_name = 'DriverInternalError'
             r['event']['payload'] = {}
-        
+
         return r
 
 
 class Alexa(object):
     class ReportState(ConnectedHomeCall):
-        def __init__(self, namespace, name, ha, payload, endpoint, correlationToken):
-            # Probably have to process on state retreived
-            # but for now just just return a temperature
-            logger.info("ReportState")
-            if hasattr(self, 'get_current_temperature'):
+        def ReportState(self):
+            if hasattr(self.entity, 'get_current_temperature'):
                 state = self.ha.get('states/' + self.entity.entity_id)
-                unit = state['attributes']['unit_of_measurement']
+                scale = get_temp_scale(state['attributes']['unit_of_measurement'])
                 temperature = self.entity.get_current_temperature(state)
                 self.context_properties.append({
                     "namespace": "Alexa.TemperatureSensor",
                     "name": "temperature",
                     "value": {
                         "value": temperature,
-                        "scale": unit
+                        "scale": scale
                     },
                     "timeOfSample": get_utc_timestamp(),
                     "uncertaintyInMilliseconds": 200
                 })
-            if hasattr(self, 'get_temperature'):
+            
+            if hasattr(self.entity, 'get_temperature'):
                 state = self.ha.get('states/' + self.entity.entity_id)
-                unit = state['attributes']['unit_of_measurement']
+                scale = get_temp_scale(state['attributes']['unit_of_measurement'])
                 temperature, mode = self.entity.get_temperature(state)
                 self.context_properties.append({
-                    "namespace": "Alexa.TemperatureSensor",
-                    "name": "temperature",
+                    "namespace": "Alexa.ThermostatController",
+                    "name": "targetSetpoint",
                     "value": {
                         "value": temperature,
-                        "scale": unit
+                        "scale": scale
                     },
                     "timeOfSample": get_utc_timestamp(),
                     "uncertaintyInMilliseconds": 200
                 })
-            if hasattr(self, 'get_lock_state'):
+                self.context_properties.append({
+                    "namespace": "Alexa.ThermostatController",
+                    "name": "thermostatMode",
+                    "value": mode.upper(),
+                    "timeOfSample": get_utc_timestamp(),
+                    "uncertaintyInMilliseconds": 200
+                })
+            
+            if hasattr(self.entity, 'get_lock_state'):
                 state = self.entity.get_lock_state().upper()
                 self.context_properties.append({
                     "namespace": "Alexa.LockController",
                     "name": "lockState",
-                    "value": state,
+                    "value": state.upper(),
                     "timeOfSample": get_utc_timestamp(),
                     "uncertaintyInMilliseconds": 200
                 })
-                self.context_properties.append({
-                    "namespace": "Alexa.EndpointHealth",
-                    "name": "connectivity",
-                    "value": {
-                        "value": "OK"
-                    },
-                    "timeOfSample": get_utc_timestamp(),
-                    "uncertaintyInMilliseconds": 200
-                })
+            #if hasattr(self.entity, 'turn_on'):
+            #    state = self.ha.get('states/' + self.entity.entity_id)
+            #    unit = state.get('state')
+            #    self.context_properties.append({
+            #        "namespace": "Alexa.PowerControllerController",
+            #        "name": "powerState",
+            #        "value": unit.upper(),
+            #        "timeOfSample": get_utc_timestamp(),
+            #        "uncertaintyInMilliseconds": 200
+            #    })
+            #self.context_properties.append({
+            #    "namespace": "Alexa.EndpointHealth",
+            #    "name": "connectivity",
+            #    "value": {
+            #        "value": "OK"
+            #    },
+            #    "timeOfSample": get_utc_timestamp(),
+            #    "uncertaintyInMilliseconds": 200
+            #})
 
     class Discovery(ConnectedHomeCall):
         def Discover(self):
@@ -476,23 +496,46 @@ class Alexa(object):
     class TemperatureSensor(ConnectedHomeCall):
         def ReportState(self):
             state = self.ha.get('states/' + self.entity.entity_id)
-            unit = state['attributes']['unit_of_measurement']
-            temperature = self.entity.get_temperature(state)
+            scale = get_temp_scale(state['attributes']['unit_of_measurement'])
+            temperature = self.entity.get_current_temperature(state)
             self.context_properties.append({
                 "namespace": "Alexa.TemperatureSensor",
                 "name": "temperature",
                 "value": {
                     "value": temperature,
-                    "scale": unit
+                    "scale": scale
                 },
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
+    class LockController(ConnectedHomeCall):
+        def Lock(self):
+            self.entity.set_lock_state(self.payload["lockState"])
+            self.context_properties.append({
+                "namespace": "Alexa.LockController",
+                "name": "lockState",
+                "value": "LOCKED",
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+        
+        def Unlock(self):
+            self.entity.set_lock_state(self.payload["lockState"])
+            self.context_properties.append({
+                "namespace": "Alexa.LockController",
+                "name": "lockState",
+                "value": "UNOCKED",
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
 
 def invoke(namespace, name, ha, payload, endpoint, correlationToken):
     class allowed(object):
         Alexa = Alexa
+    if namespace == 'Alexa' and name == 'ReportState':
+        namespace = namespace + '.' + name
+    
     make_class = operator.attrgetter(namespace)
     logger.debug('Calling invoke %s, %s, %s, %s, %s, %s', namespace, name, ha,
                  payload, endpoint, correlationToken)
@@ -563,6 +606,12 @@ def convert_temp(temp, from_unit=u'°C', to_unit=u'°C'):
         return temp * 1.8 + 32
     else:
         return (temp - 32) / 1.8
+        
+def get_temp_scale(unit):
+    if unit == u'°C':
+        return 'CELSIUS'
+    else:
+        return 'FAHRENHEIT'
 
 def get_utc_timestamp():
     return datetime.datetime.utcnow().isoformat()
@@ -611,7 +660,7 @@ class Entity(object):
                                 "name": "powerState"
                             }
                         ],
-                        "proactivelyReported": True,
+                        "proactivelyReported": False,
                         "retrievable": True
                     }
                 })
@@ -628,7 +677,7 @@ class Entity(object):
                                 "name": "percentage"
                             }
                         ],
-                        "proactivelyReported": True,
+                        "proactivelyReported": False,
                         "retrievable": True
                     }
                 })
@@ -646,7 +695,7 @@ class Entity(object):
                                 "name": "temperature"
                             }
                         ],
-                        "proactivelyReported": True,
+                        "proactivelyReported": False,
                         "retrievable": True
                     }
                 })
@@ -666,7 +715,7 @@ class Entity(object):
                                 "name": "thermostatMode"
                             }
                         ],
-                        "proactivelyReported": True,
+                        "proactivelyReported": False,
                         "retrievable": True
                     }
                 })
@@ -683,7 +732,7 @@ class Entity(object):
                                 "name": "lockState"
                             }
                         ],
-                        "proactivelyReported": True,
+                        "proactivelyReported": False,
                         "retrievable": True
                     }
                 })
@@ -701,7 +750,7 @@ class Entity(object):
                                     "name": "color"
                                 }
                             ],
-                            "proactivelyReported": True,
+                            "proactivelyReported": False,
                             "retrievable": True
                         }
                     })
@@ -717,7 +766,7 @@ class Entity(object):
                                     "name": "colorTemperatureInKelvin"
                                 }
                             ],
-                            "proactivelyReported": True,
+                            "proactivelyReported": False,
                             "retrievable": True
                         }
                     })
@@ -733,7 +782,7 @@ class Entity(object):
                             "name": "connectivity"
                         }
                     ],
-                    "proactivelyReported": True,
+                    "proactivelyReported": False,
                     "retrievable": True
                 }
             })            
@@ -913,7 +962,6 @@ class FanEntity(ToggleEntity):
             speed = "high"
         self._call_service('fan/set_speed', {'speed': speed})
 
-
 DOMAINS = {
     'garage_door': GarageDoorEntity,
     'group': ToggleEntity,
@@ -984,26 +1032,27 @@ def request_handler(request, context):
         
         ha = HomeAssistant(config)
         
-        logger.info('Directive:')
-        logger.info(json.dumps(request, indent=4, sort_keys=True))
+        logger.debug('Directive:')
+        logger.debug(json.dumps(request, indent=4, sort_keys=True))
         
         directive = request['directive']
         name = directive['header']['name']
         namespace = directive['header']['namespace']
         payload = directive.get('payload')
         endpoint = directive.get('endpoint')
-        correlationToken = directive.get('correlationToken')
+        header = directive['header']
+        correlationToken = header.get('correlationToken')
         
-        logger.info('calling request_handler for %s, payload: %s', name,
+        logger.debug('calling request_handler for %s, payload: %s', name,
                  str({k: v for k, v in payload.items()
                     if k != u'accessToken'}))
         
         response = invoke(namespace, name, ha, payload, endpoint, correlationToken)
         
-        logger.info("Response:")
-        logger.info(json.dumps(response, indent=4, sort_keys=True))
+        logger.debug("Response:")
+        logger.debug(json.dumps(response, indent=4, sort_keys=True))
         
-        logger.info("Validate response")
+        logger.debug("Validate response")
         #validate_message(request, response)
         
         return response
