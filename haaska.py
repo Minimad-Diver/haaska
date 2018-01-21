@@ -301,17 +301,6 @@ class Alexa(object):
 
     class BrightnessController(ConnectedHomeCall):
         def AdjustBrightness(self):
-            percentage = self.payload['brightness']
-            self.entity.set_percentage(percentage)
-            self.context_properties.append({
-                "namespace": "Alexa.BrightnessController",
-                "name": "brightness",
-                "value": percentage,
-                "timeOfSample": get_utc_timestamp(),
-                "uncertaintyInMilliseconds": 200
-            })
-
-        def SetBrightness(self):
             delta = self.payload['brightnessDelta']
             val = self.entity.get_percentage()
             val += delta
@@ -324,6 +313,17 @@ class Alexa(object):
                 "namespace": "Alexa.BrightnessController",
                 "name": "brightness",
                 "value": val,
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+            
+        def SetBrightness(self):
+            percentage = self.payload['brightness']
+            self.entity.set_percentage(percentage)
+            self.context_properties.append({
+                "namespace": "Alexa.BrightnessController",
+                "name": "brightness",
+                "value": percentage,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
