@@ -859,27 +859,27 @@ class Entity(object):
                     })
             
         if hasattr(self, 'set_volume') or hasattr(self, 'get_volume'):
-        capabilities.append(
-            {
-                "type": "AlexaInterface",
-                "interface": "Alexa.Speaker",
-                "version": "3",
-                "properties": {
-                    "supported": [
-                        {
-                            "name": "SetVolume"
-                        },
-                        {
-                            "name": "AdjustVolume"
-                        },
-                        {
-                            "name": "SetMute"
-                        }
-                    ],
-                    "proactivelyReported": True,
-                    "retrievable": True
-                }
-            })
+            capabilities.append(
+                {
+                    "type": "AlexaInterface",
+                    "interface": "Alexa.Speaker",
+                    "version": "3",
+                    "properties": {
+                        "supported": [
+                            {
+                                "name": "SetVolume"
+                            },
+                            {
+                                "name": "AdjustVolume"
+                            },
+                            {
+                                "name": "SetMute"
+                            }
+                        ],
+                        "proactivelyReported": False,
+                        "retrievable": True
+                    }
+                })
 
         capabilities.append(
             {
