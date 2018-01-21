@@ -411,7 +411,7 @@ class Alexa(object):
             # Only 4 allowed values for mode in this response
             if mode not in ['AUTO', 'COOL', 'ECO', 'HEAT']:
                 current = self.entity.get_current_temperature(state)
-                if 'cool' in state['attributes']['operation_list']
+                if 'cool' in state['attributes']['operation_list']:
                     mode = 'COOL' if current >= new_temp else 'HEAT'
                 else:
                     mode = 'HEAT'
@@ -455,7 +455,7 @@ class Alexa(object):
             # Only 4 allowed values for mode in this response
             if mode not in ['AUTO', 'COOL', 'ECO', 'HEAT']:
                 current = self.entity.get_current_temperature(state)
-                if 'cool' in state['attributes']['operation_list']
+                if 'cool' in state['attributes']['operation_list']:
                     mode = 'COOL' if current >= new_temp else 'HEAT'
                 else:
                     mode = 'HEAT'
@@ -622,13 +622,13 @@ def get_utc_timestamp():
 def get_uuid():
     return str(uuid.uuid4())
 
-def check_value(value, min=None, max=None)
-    if value is None or min == max:
+def check_value(value, minValue=None, maxValue=None):
+    if value is None or minValue == maxValue:
         return value
-    if value <= min:
-        return value = min
-    elif value >= max:
-        return value = max
+    if value <= minValue:
+        return minValue
+    elif value >= maxValue:
+        return maxValue
 
 def mk_entity(ha, entity_id, supported_features=0):
     entity_domain = entity_id.split('.', 1)[0]
