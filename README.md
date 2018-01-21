@@ -2,6 +2,7 @@
 [![Build Status](https://travis-ci.org/mike-grant/haaska.svg?branch=master)](https://travis-ci.org/mike-grant/haaska)
 
 **Note:** This fork is an in-progress fork of HAASKA to update it to support the Amazon Smart Home V3 API..
+
 *Merging code from:
 * **Mike Grant**: https://github.com/mike-grant/haaska/tree/alexa_v3
 * **Bkryza**: https://github.com/bkryza/haaska
@@ -11,6 +12,14 @@ I am only able to test on items that I have myself (currently a few lights, swit
  
 ** VERY IMPORTANT **
 The Amazon Smart Home V3 API DOES NOT support all of the functionality of the V2 API (Yet), Amazon are 'looking' into providing it but no timescales.
+
+** ITEMS THTA WORK* *
+Lights (Brightness, On/Off)
+Switches (On/Off)
+Thermostat (On/Off, Set Temp, Get Temp, Get Current Temp)
+
+** ITEMS THAT MIGHT WORK **
+Everythig Else
 
 haaska implements a bridge between a [Home Assistant](https://home-assistant.io) instance and the [Smart Home Skill API](https://developer.amazon.com/alexa/smart-home) for Amazon's Alexa. It provides voice control for a connected home managed by Home Assistant, through any Alexa-enabled device. Currently, haaska supports the following entity types:
 

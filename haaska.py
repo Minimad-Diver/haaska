@@ -125,6 +125,9 @@ class ConnectedHomeCall(object):
         if name == 'ReportState':
             self.response_name = 'StateReport'
             self.namespace = 'Alexa'
+        elif name == 'SetTargetTemperature':
+            self.response_name = 'Response'
+            self.namespace = 'Alexa'
         else:
             self.response_name = self.name + '.Response'
         self.ha = ha
@@ -245,6 +248,18 @@ class Alexa(object):
                     "uncertaintyInMilliseconds": 200
                 })
             
+            if hasattr(self.entity, 'get_percentage'):
+                state = self.ha.get('states/' + self.entity.entity_id)
+                #unit = state.get('state')
+                val = self.entity.get_percentage()
+                self.context_properties.append({
+                    "namespace": "Alexa.PercentageController",
+                    "name": "percentage",
+                    "value": val,
+                    "timeOfSample": get_utc_timestamp(),
+                    "uncertaintyInMilliseconds": 200
+                })
+                
             # Report EndpointHealth for ALL items
             self.context_properties.append({
                 "namespace": "Alexa.EndpointHealth",
@@ -411,6 +426,7 @@ class Alexa(object):
         def SetTargetTemperature(self):
             state = self.ha.get('states/' + self.entity.entity_id)
             unit = state['attributes']['unit_of_measurement']
+            scale = get_temp_scale(state['attributes']['unit_of_measurement'])
             min_temp = convert_temp(state['attributes']['min_temp'], unit)
             max_temp = convert_temp(state['attributes']['max_temp'], unit)
             temperature, mode = self.entity.get_temperature(state)
@@ -426,18 +442,21 @@ class Alexa(object):
                 mode = 'COOL' if current >= new_temp else 'HEAT'
             
             self.entity.set_temperature(new_temp, mode.lower(), state)
-                            
+            
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "targetSetpoint",
-                "value": new_temp,
+                "value": {
+                    "value": new_temp,
+                    "scale": scale
+                },
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "thermostatMode",
-                "value": mode,
+                "value": mode.upper(),
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
@@ -445,6 +464,7 @@ class Alexa(object):
         def AdjustTargetTemperature(self):
             state = self.ha.get('states/' + self.entity.entity_id)
             unit = state['attributes']['unit_of_measurement']
+            scale = get_temp_scale(state['attributes']['unit_of_measurement'])
             min_temp = convert_temp(state['attributes']['min_temp'], unit)
             max_temp = convert_temp(state['attributes']['max_temp'], unit)
             temperature, mode = self.entity.get_temperature(state)
@@ -470,14 +490,17 @@ class Alexa(object):
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "targetSetpoint",
-                "value": new_temp,
+                "value": {
+                    "value": new_temp,
+                    "scale": scale
+                },
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "thermostatMode",
-                "value": mode,
+                "value": mode.upper(),
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
@@ -493,7 +516,7 @@ class Alexa(object):
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "thermostatMode",
-                "value": mode,
+                "value": mode.upper(),
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
@@ -670,7 +693,6 @@ class Entity(object):
                         "retrievable": True
                     }
                 })
-
         if hasattr(self, 'set_percentage') or hasattr(self, 'get_percentage'):
             capabilities.append(
                 {
@@ -681,6 +703,21 @@ class Entity(object):
                         "supported": [
                             {
                                 "name": "percentage"
+                            }
+                        ],
+                        "proactivelyReported": False,
+                        "retrievable": True
+                    }
+                })
+            capabilities.append(
+                {
+                    "type": "AlexaInterface",
+                    "interface": "Alexa.BrightnessController",
+                    "version": "3",
+                    "properties": {
+                        "supported": [
+                            {
+                                "name": "brightness"
                             }
                         ],
                         "proactivelyReported": False,
@@ -906,10 +943,19 @@ class ClimateEntity(Entity):
         state = self.ha.get('states/' + self.entity_id)
         current = self.get_current_temperature(state)
         temperature, mode = self.get_temperature(state)
+        # I think logic should change here, maybe
+        # based on Hive heating
+        # auto = schedule - doesn't turn on heating
+        # heat = manual - heating is turned on
+        # off = off
+        
         if temperature is None:
             mode = 'auto'
         else:
-            mode = 'cool' if current >= temperature else 'heat'
+            if 'cool' in state['attributes']['operation_list']:
+                mode = 'cool' if current >= temperature else 'heat'
+            else:
+                mode = 'heat'
         self._call_service('climate/set_operation_mode',
                            {'operation_mode': mode})
 
