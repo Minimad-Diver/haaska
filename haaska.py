@@ -62,23 +62,6 @@ DISPLAY_CATEGORIES = {
     'automation': 'ACTIVITY_TRIGGER'
 }
 
-ALEXA_INTERFACES = {
-    'BrightnessController': {'directives': ['AdjustBrightness', 'SetBrightness']},
-    'CameraStreamController': {'directives': ['InitializeCameraStreams']},
-    'ColorController': {'directives': ['SetColor']},
-    'ColorTemperatureController': {'directives': ['DecreaseColorTemperature', 'IncreaseColorTemperature', 'SetColorTemperature']},
-    'InputController': {'directives': ['SelectInput']},
-    'LockController': {'directives': ['Lock', 'Unlock']},
-    'PercentageController': {'directives': ['SetPercentage', 'AdjustPercentage']},
-    'PlaybackController': {'directives': ['FastForward', 'Next', 'Pause', 'Play', 'Previous', 'Rewind', 'StartOver', 'Stop']},
-    'PowerController': {'directives': ['TurnOn', 'TurnOff']},
-    'PowerLevelController': {'directives': ['SetPowerLevel', 'AdjustPowerLevel']},
-    'Speaker': {'directives': ['SetVolume', 'AdjustVolume', 'SetMute']},
-    'StepSpeaker': {'directives': ['AdjustVolume', 'SetMute']},
-    'TemperatureSensor': {'directives': ['ReportState']},
-    'ThermostatController': {'directives': ['SetTargetTemperature', 'AdjustTargetTemperature', 'SetThermostatMode']}
-}
-
 class HomeAssistant(object):
     def __init__(self, config):
         self.config = config
@@ -122,23 +105,22 @@ class ConnectedHomeCall(object):
                      name, payload)
         self.namespace = namespace
         self.name = name
-        if name == 'ReportState':
+        if self.name == 'ReportState':
             self.response_name = 'StateReport'
-            self.namespace = 'Alexa'
-        elif name == 'SetTargetTemperature':
-            self.response_name = 'Response'
-            self.namespace = 'Alexa'
         else:
-            self.response_name = self.name + '.Response'
+            self.response_name = 'Response'
+            
+        self.namespace = 'Alexa'
         self.ha = ha
         self.payload = payload
         self.endpoint = endpoint
         self.entity = None
         self.context_properties = []
+        self.correlationToken = correlationToken
         if self.endpoint and ('endpointId' in self.endpoint):
             self.entity = mk_entity(ha, self.endpoint['endpointId']
                                     .replace(':', '.'))
-        self.correlationToken = correlationToken
+        
 
     class ConnectedHomeException(Exception):
         def __init__(self, name="DriverInternalError", payload={}):
@@ -228,34 +210,33 @@ class Alexa(object):
                 })
             
             if hasattr(self.entity, 'get_lock_state'):
-                state = self.entity.get_lock_state().upper()
+                lock_state = self.entity.get_lock_state().upper()
                 self.context_properties.append({
                     "namespace": "Alexa.LockController",
                     "name": "lockState",
-                    "value": state.upper(),
+                    "value": lock_state,
                     "timeOfSample": get_utc_timestamp(),
                     "uncertaintyInMilliseconds": 200
                 })
             
             if (hasattr(self.entity, 'turn_on') or hasattr(self.entity, 'turn_off')) and not hasattr(self.entity, 'get_temperature'):
                 state = self.ha.get('states/' + self.entity.entity_id)
-                unit = state.get('state')
+                device_state = state.get('state').upper()
                 self.context_properties.append({
                     "namespace": "Alexa.PowerController",
                     "name": "powerState",
-                    "value": unit.upper(),
+                    "value": device_state,
                     "timeOfSample": get_utc_timestamp(),
                     "uncertaintyInMilliseconds": 200
                 })
             
             if hasattr(self.entity, 'get_percentage'):
                 state = self.ha.get('states/' + self.entity.entity_id)
-                #unit = state.get('state')
-                val = self.entity.get_percentage()
+                percentage = self.entity.get_percentage()
                 self.context_properties.append({
                     "namespace": "Alexa.PercentageController",
                     "name": "percentage",
-                    "value": val,
+                    "value": percentage,
                     "timeOfSample": get_utc_timestamp(),
                     "uncertaintyInMilliseconds": 200
                 })
@@ -302,28 +283,25 @@ class Alexa(object):
     class BrightnessController(ConnectedHomeCall):
         def AdjustBrightness(self):
             delta = self.payload['brightnessDelta']
-            val = self.entity.get_percentage()
-            val += delta
-            if val < 0.0:
-                val = 0
-            elif val >= 100.0:
-                val = 100.0
-            self.entity.set_percentage(val)
+            brightness = self.entity.get_percentage()
+            brightness += delta
+            brightness = check_value(brightness, 0.0, 100.0)
+            self.entity.set_percentage(brightness)
             self.context_properties.append({
                 "namespace": "Alexa.BrightnessController",
                 "name": "brightness",
-                "value": val,
+                "value": brightness,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
             
         def SetBrightness(self):
-            percentage = self.payload['brightness']
-            self.entity.set_percentage(percentage)
+            brightness = self.payload['brightness']
+            self.entity.set_percentage(brightness)
             self.context_properties.append({
                 "namespace": "Alexa.BrightnessController",
                 "name": "brightness",
-                "value": percentage,
+                "value": brightness,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
@@ -342,82 +320,76 @@ class Alexa(object):
 
         def AdjustPercentage(self):
             delta = self.payload['percentageDelta']
-            val = self.entity.get_percentage()
-            val += delta
-            if val < 0.0:
-                val = 0
-            elif val >= 100.0:
-                val = 100.0
-            self.entity.set_percentage(val)
+            percentage = self.entity.get_percentage()
+            percentage += delta
+            percentage = check_value(percentage, 0.0, 100.0)
+            self.entity.set_percentage(percentage)
             self.context_properties.append({
                 "namespace": "Alexa.PercentageController",
                 "name": "percentage",
-                "value": val,
+                "value": percentage,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
     class ColorTemperatureController(ConnectedHomeCall):
         def DecreaseColorTemperature(self):
-            current = self.entity.get_color_temperature()
-            new = current - 500
-            self.entity.set_color_temperature(new)
+            currentColorTemp = self.entity.get_color_temperature()
+            newColorTemp = currentColorTemp - 500
+            self.entity.set_color_temperature(newColorTemp)
             self.context_properties.append({
                 "namespace": "Alexa.ColorTemperatureController",
                 "name": "colorTemperatureInKelvin",
-                "value": new,
+                "value": newColorTemp,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
         def IncreaseColorTemperature(self):
-            current = self.entity.get_color_temperature()
-            new = current + 500
-            self.entity.set_color_temperature(new)
+            currentColorTemp = self.entity.get_color_temperature()
+            newColorTemp = currentColorTemp + 500
+            self.entity.set_color_temperature(newColorTemp)
             self.context_properties.append({
                 "namespace": "Alexa.ColorTemperatureController",
                 "name": "colorTemperatureInKelvin",
-                "value": new,
+                "value": newColorTemp,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
         def SetColorTemperature(self):
-            temp = self.payload['colorTemperatureInKelvin']
+            colorTemp = self.payload['colorTemperatureInKelvin']
             self.entity.set_color_temperature(temp)
             self.context_properties.append({
                 "namespace": "Alexa.ColorTemperatureController",
                 "name": "colorTemperatureInKelvin",
-                "value": temp,
+                "value": colorTemp,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
 
     class PowerLevelController(ConnectedHomeCall):
         def AdjustPowerLevel(self):
+            delta = self.payload['powerLevelDelta']
+            val = self.entity.get_percentage()
+            val += delta
+            val = check_value(val, 0.0, 100.0)
+            self.entity.set_percentage(val)
+            self.context_properties.append({
+                "namespace": "Alexa.PowerLevelController",
+                "name": "powerLevel",
+                "value": val,
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+        
+        def SetPowerLevel(self):
             percentage = self.payload['powerLevel']
             self.entity.set_percentage(percentage)
             self.context_properties.append({
                 "namespace": "Alexa.PowerLevelController",
                 "name": "powerLevel",
                 "value": percentage,
-                "timeOfSample": get_utc_timestamp(),
-                "uncertaintyInMilliseconds": 200
-            })
-
-        def SetPowerLevel(self):
-            delta = self.payload['powerLevelDelta']
-            val = self.entity.get_percentage()
-            val += delta
-            if val < 0.0:
-                val = 0
-            elif val >= 100.0:
-                val = 100.0
-            self.entity.set_percentage(val)
-            self.context_properties.append({
-                "namespace": "Alexa.PowerLevelController",
-                "name": "powerLevel",
-                "value": val,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
@@ -439,7 +411,10 @@ class Alexa(object):
             # Only 4 allowed values for mode in this response
             if mode not in ['AUTO', 'COOL', 'ECO', 'HEAT']:
                 current = self.entity.get_current_temperature(state)
-                mode = 'COOL' if current >= new_temp else 'HEAT'
+                if 'cool' in state['attributes']['operation_list']
+                    mode = 'COOL' if current >= new_temp else 'HEAT'
+                else:
+                    mode = 'HEAT'
             
             self.entity.set_temperature(new_temp, mode.lower(), state)
             
@@ -472,18 +447,18 @@ class Alexa(object):
             new_temp = op(temperature,float(self.payload['targetSetpointDelta']['value']))
             # Clamp the allowed temperature for relative adjustments
             if temperature != max_temp and temperature != min_temp:
-                if new_temp < min_temp:
-                    new_temp = min_temp
-                elif new_temp > max_temp:
-                    new_temp = max_temp
-        
+                new_temp = check_value(new_temp, min_temp, max_temp)
+            
             if new_temp > max_temp or new_temp < min_temp:
                 raise ConnectedHomeCall.ValueOutOfRangeError(min_temp,max_temp)
         
             # Only 4 allowed values for mode in this response
             if mode not in ['AUTO', 'COOL', 'ECO', 'HEAT']:
                 current = self.entity.get_current_temperature(state)
-                mode = 'COOL' if current >= new_temp else 'HEAT'
+                if 'cool' in state['attributes']['operation_list']
+                    mode = 'COOL' if current >= new_temp else 'HEAT'
+                else:
+                    mode = 'HEAT'
             
             self.entity.set_temperature(new_temp, mode.lower(), state)
                             
@@ -642,11 +617,18 @@ def get_temp_scale(unit):
         return 'FAHRENHEIT'
 
 def get_utc_timestamp():
-    #return datetime.datetime.utcnow().isoformat()
     return datetime.datetime.strftime(datetime.datetime.utcnow(), "%Y-%m-%dT%H:%M:%S.%f")[:-4] + "Z"
 
 def get_uuid():
     return str(uuid.uuid4())
+
+def check_value(value, min=None, max=None)
+    if value is None or min == max:
+        return value
+    if value <= min:
+        return value = min
+    elif value >= max:
+        return value = max
 
 def mk_entity(ha, entity_id, supported_features=0):
     entity_domain = entity_id.split('.', 1)[0]
@@ -1088,12 +1070,14 @@ def request_handler(request, context):
         logger.debug(json.dumps(request, indent=4, sort_keys=True))
         
         directive = request['directive']
-        name = directive['header']['name']
-        namespace = directive['header']['namespace']
+        header = directive['header']
+        
+        namespace = header.get('namespace')
+        name = header.get('name')
+        correlationToken = header.get('correlationToken')
+        
         payload = directive.get('payload')
         endpoint = directive.get('endpoint')
-        header = directive['header']
-        correlationToken = header.get('correlationToken')
         
         logger.debug('calling request_handler for %s, payload: %s', name,
                  str({k: v for k, v in payload.items()
