@@ -48,7 +48,7 @@ DISPLAY_CATEGORIES = {
     'garage_door': 'SWITCH',
     'group': 'SWITCH',
     'input_boolean': 'SWITCH',
-    'input_slider': 'SWITCH',
+    'input_number': 'SWITCH',
     'switch': 'SWITCH',
     'fan': 'SWITCH',
     'cover': 'SWITCH',
@@ -532,6 +532,68 @@ class Alexa(object):
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
+    class Speaker(ConnectedHomeCall):
+        def SetVolume(self):
+            volume = self.payload['volume']
+            volume = check_value(volume, 0.0, 100.0)
+            self.entity.set_volume(volume)
+            mute_state = self.entity.get_mute()
+            self.context_properties.append({
+                "namespace": "Alexa.Speaker",
+                "name": "volume",
+                "value": volume,
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+            self.context_properties.append({
+                "namespace": "Alexa.Speaker",
+                "name": "muted",
+                "value": mute_state,
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+        
+        def AdjustVolume(self):
+            delta = self.payload['volume']
+            volume = self.entity.get_volume()
+            volume += delta
+            volume = check_value(volume, 0.0, 100.0)
+            self.entity.set_volume(volume)
+            mute_state = self.entity.get_mute()
+            self.context_properties.append({
+                "namespace": "Alexa.Speaker",
+                "name": "volume",
+                "value": volume,
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+            self.context_properties.append({
+                "namespace": "Alexa.Speaker",
+                "name": "muted",
+                "value": mute_state,
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+        
+        def SetMute(self):
+            mute = self.payload['mute']
+            mute_state = self.entity.set_mute(mute)
+            volume = self.entity.get_volume()
+            self.context_properties.append({
+                "namespace": "Alexa.Speaker",
+                "name": "volume",
+                "value": volume,
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+            self.context_properties.append({
+                "namespace": "Alexa.Speaker",
+                "name": "muted",
+                "value": mute_state,
+                "timeOfSample": get_utc_timestamp(),
+                "uncertaintyInMilliseconds": 200
+            })
+        
 
 def invoke(namespace, name, ha, payload, endpoint, correlationToken):
     class allowed(object):
@@ -795,6 +857,29 @@ class Entity(object):
                             "retrievable": True
                         }
                     })
+            
+        if hasattr(self, 'set_volume') or hasattr(self, 'get_volume'):
+        capabilities.append(
+            {
+                "type": "AlexaInterface",
+                "interface": "Alexa.Speaker",
+                "version": "3",
+                "properties": {
+                    "supported": [
+                        {
+                            "name": "SetVolume"
+                        },
+                        {
+                            "name": "AdjustVolume"
+                        },
+                        {
+                            "name": "SetMute"
+                        }
+                    ],
+                    "proactivelyReported": True,
+                    "retrievable": True
+                }
+            })
 
         capabilities.append(
             {
@@ -823,7 +908,7 @@ class ToggleEntity(Entity):
         self._call_service('homeassistant/turn_off')
 
 
-class InputSliderEntity(Entity):
+class InputNumberEntity(Entity):
     def get_percentage(self):
         state = self.ha.get('states/' + self.entity_id)
         value = float(state['state'])
@@ -842,7 +927,7 @@ class InputSliderEntity(Entity):
         rounded = step * round(scaled / step)
         adjusted = rounded + minimum
 
-        self._call_service('input_slider/select_value', {'value': adjusted})
+        self._call_service('input_number/set_value', {'value': adjusted})
 
 
 class GarageDoorEntity(ToggleEntity):
@@ -1000,7 +1085,7 @@ DOMAINS = {
     'garage_door': GarageDoorEntity,
     'group': ToggleEntity,
     'input_boolean': ToggleEntity,
-    'input_slider': InputSliderEntity,
+    'input_number': InputNumberEntity,
     'switch': ToggleEntity,
     'fan': FanEntity,
     'cover': CoverEntity,
