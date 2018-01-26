@@ -31,7 +31,7 @@ import datetime
 import uuid
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 # Imports for v3 validation
-#from validation import validate_message
+from validation import validate_message
 
 # Disable warning about Insecure Request
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -84,7 +84,7 @@ class HomeAssistant(object):
         return r.json()
 
     def post(self, relurl, d, wait=False):
-        read_timeout = None if wait else 0.01
+        read_timeout = None if wait else 1.00 #0.01
         r = None
         try:
             logger.debug('HA post calling %s with %s', relurl, str(d))
@@ -481,17 +481,17 @@ class Alexa(object):
             })
             
         def SetThermostatMode(self):
-            mode = self.payload['thermostatMode']
-            
+            mode = self.payload['thermostatMode']['value']
+            logger.debug('mode is ' + mode)
             if mode in ['AUTO', 'COOL', 'ECO', 'HEAT']:
-                self.entity.turn_on
+                self.entity.turn_on()
             else:
-                self.entity.turn_off
+                self.entity.turn_off()
             
             self.context_properties.append({
                 "namespace": "Alexa.ThermostatController",
                 "name": "thermostatMode",
-                "value": mode.upper(),
+                "value": mode,
                 "timeOfSample": get_utc_timestamp(),
                 "uncertaintyInMilliseconds": 200
             })
@@ -534,7 +534,7 @@ class Alexa(object):
             })
     class Speaker(ConnectedHomeCall):
         def SetVolume(self):
-            volume = self.payload['volume']
+            volume = self.payload['volume']['value']
             volume = check_value(volume, 0.0, 100.0)
             self.entity.set_volume(volume)
             mute_state = self.entity.get_mute()
@@ -554,7 +554,7 @@ class Alexa(object):
             })
         
         def AdjustVolume(self):
-            delta = self.payload['volume']
+            delta = self.payload['volume']['value']
             volume = self.entity.get_volume()
             volume += delta
             volume = check_value(volume, 0.0, 100.0)
@@ -576,7 +576,7 @@ class Alexa(object):
             })
         
         def SetMute(self):
-            mute = self.payload['mute']
+            mute = self.payload['mute']['value']
             mute_state = self.entity.set_mute(mute)
             volume = self.entity.get_volume()
             self.context_properties.append({
@@ -594,7 +594,30 @@ class Alexa(object):
                 "uncertaintyInMilliseconds": 200
             })
         
-
+    class PlaybackController(ConnectedHomeCall):
+        def FastForward(self):
+            logger.debug('FastForward')
+        def Next(self):
+            logger.debug('Next')
+        def Pause(self):
+            logger.debug('Pause')
+        def Play(self):
+            logger.debug('Play')
+        def Previous(self):
+            logger.debug('Previous')
+        def Rewind(self):
+            logger.debug('Rewind')
+        def StartOver(self):
+            logger.debug('StartOver')
+        def Stop(self):
+            logger.debug('Stop')
+            
+    class RemoteVideoPlayer(ConnectedHomeCall):
+        def SearchAndPlay(self):
+            logger.debug('SearchAndPlay')
+        def SearchAndDisplayResults(self):
+            logger.debug('SearchAndDisplayResults')
+    
 def invoke(namespace, name, ha, payload, endpoint, correlationToken):
     class allowed(object):
         Alexa = Alexa
@@ -1003,6 +1026,15 @@ class MediaPlayerEntity(ToggleEntity):
     def set_percentage(self, val):
         vol = val / 100.0
         self._call_service('media_player/volume_set', {'volume_level': vol})
+        
+    def get_volume(self):
+        state = self.ha.get('states/' + self.entity_id)
+        vol = state['attributes']['volume_level']
+        return vol * 100.0
+        
+    def set_volume(self, val):
+        vol = val / 100.0
+        self._call_service('media_player/volume_set', {'volume_level': vol})
 
 
 class ClimateEntity(Entity):
@@ -1010,12 +1042,6 @@ class ClimateEntity(Entity):
         state = self.ha.get('states/' + self.entity_id)
         current = self.get_current_temperature(state)
         temperature, mode = self.get_temperature(state)
-        # I think logic should change here, maybe
-        # based on Hive heating
-        # auto = schedule - doesn't turn on heating
-        # heat = manual - heating is turned on
-        # off = off
-        
         if temperature is None:
             mode = 'auto'
         else:
@@ -1029,6 +1055,14 @@ class ClimateEntity(Entity):
     def turn_off(self):
         self._call_service('climate/set_operation_mode',
                            {'operation_mode': 'off'})
+                           
+    def aux_heat_on(self):
+        self._call_service('climate/set_aux_heat',
+                            {'aux_heat': 'on'})
+                            
+    def aux_heat_off(self):
+        self._call_service('climate/set_aux_heat',
+                            {'aux_heat': 'off'})
 
     def get_current_temperature(self, state=None):
         if not state:
@@ -1141,7 +1175,7 @@ class Configuration(object):
     def dump(self):
         return json.dumps(self.opts, indent=2, separators=(',', ': '))
 
-def request_handler(request, context):
+def event_handler(request, context):
     #Main Lambda handler.
     #Only expects v3 requests (as we are only user) so no neeed to handle v2 requests
     try:
